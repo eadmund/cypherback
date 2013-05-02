@@ -1,0 +1,24 @@
+* Keys
+** Kce: random chunk encryption key
+** Kca: random chunk authentication key
+** Kcs: random chunk storage key
+* For each directory
+** append stat(dir) to metadata
+* For each file
+** chunk file into 256K chunks
+** for each chunk P
+*** compress it
+*** pad with up to 256 bytes
+*** generate random 128-bit IV
+*** encrypt under IV, Kce -> C (under GCM, also tag T)
+*** generate HMAC(SHA384, Kca, C) -> H
+*** generate HMAC(SHA384, Kcs, P) -> S
+*** queue for storage of C, (optionally T), H under S
+** append stat(file), list of Ses to metadata
+* Sort queue by chunk size descending
+* Future extensions
+** probabilistic chunk sizes
+*** have to be very careful not to accidentally fingerprint
+* CLI
+** cypherback secrets generate [-plaintext-tag TAG]
+*** generate secrets file, with optional plaintext name TAG (otherwise is named with a random 128-bit hex string)
