@@ -11,6 +11,7 @@ import (
 	"hash"
 	"io"
 	"io/ioutil"
+	"math/big"
 	"os"
 	"path/filepath"
 	//"bufio"
@@ -21,6 +22,23 @@ type metadata struct {
 	info   os.FileInfo
 	chunks [][]byte
 }
+
+/*
+
+Chunk format
+
+Byte Length
+  0    1    version (zero for this format)
+  1    1    compressed?
+  2   16    initialisation vector
+ 18    4    length
+ 22    -    AES-256-CTR(chunk encryption key, data)
+  -   48    HMAC-SHA-384(chunk authentication key, all preceding bytes)
+
+Each chunk is stored to the backing store under the name
+HMAC-SHA-384(chunk storage key). 
+
+*/
 
 /*
 emit all path/info tuples
@@ -112,7 +130,8 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 type encWriter struct {
 	writer   io.Writer
 	buf      []byte
-	cypher   cipher.BlockMode
+	cypher   cipher.Stream
+	iv       []byte
 	authHMAC hash.Hash
 }
 
@@ -124,15 +143,35 @@ func (ew encWriter) Write(b []byte) (int, error) {
 }
 
 func (ew encWriter) Close() error {
-	b := pad(ew.buf)
-	ew.cypher.CryptBlocks(b, b)
-	ew.authHMAC.Write(b)
-	_, err := ew.writer.Write(b)
+	writer := io.MultiWriter(ew.writer, ew.authHMAC)
+	_, err := writer.Write([]byte{0, 1}) // version, compression always true
 	if err != nil {
 		return err
 	}
+
+	_, err = writer.Write(ew.iv)
+	if err != nil {
+		return err
+	}
+
+	lenBig := big.NewInt(int64(len(ew.buf)))
+	lenBytes := lenBig.Bytes()
+	lenBytes = append(make([]byte, 4-len(lenBytes)), lenBytes...)
+	_, err = writer.Write(lenBytes)
+	if err != nil {
+		return err
+	}
+
+	stream := cipher.StreamWriter{S: ew.cypher, W: writer}
+	n, err := stream.Write(ew.buf)
+	if err != nil {
+		return err
+	}
+	if n != len(ew.buf) {
+		return fmt.Errorf("Out-of-sync keystream")
+	}
 	authSum := ew.authHMAC.Sum(nil)
-	_, err = ew.writer.Write(authSum)
+	_, err = writer.Write(authSum)
 	return err
 }
 
@@ -141,14 +180,18 @@ func newEncWriter(w io.Writer, secrets *Secrets) (*encWriter, error) {
 	if err != nil {
 		return nil, err
 	}
-	cypher := cipher.NewCBCEncrypter(aesCypher, secrets.chunkEncryption)
+	iv, err := genKey(16)
+	if err != nil {
+		return nil, err
+	}
+	cypher := cipher.NewCTR(aesCypher, iv)
 	authHMAC := hmac.New(sha512.New384, secrets.chunkAuthentication)
 	authHMAC.Write([]byte{0}) // file version
-	return &encWriter{w, make([]byte, 0), cypher, authHMAC}, nil
+	return &encWriter{w, make([]byte, 0), cypher, iv, authHMAC}, nil
 }
 
 func pad(b []byte) []byte {
-	padLen := -((len(b) % 16) - 16)
+	padLen := -((len(b) % 256) - 256)
 	fmt.Println(len(b), padLen)
 	padding := make([]byte, padLen)
 	for i := range padding {
