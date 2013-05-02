@@ -108,36 +108,34 @@ func writeSecrets(secrets *Secrets, path string) (err error) {
 	}
 	defer file.Close()
 
+	writer := io.MultiWriter(file, authHMAC)
 	version := []byte{0}
-	n, err = file.Write(version)
+	n, err = writer.Write(version)
 	if err != nil {
 		return err
 	}
 	if n != 1 {
 		return fmt.Errorf("Error writing secrets file")
 	}
-	authHMAC.Write(version) // per the language docs, hash.Hash.Write never errors
 
-	n, err = file.Write(salt)
+	n, err = writer.Write(salt)
 	if err != nil {
 		return err
 	}
 	if n != len(salt) {
 		return fmt.Errorf("Error writing secrets file")
 	}
-	authHMAC.Write(salt)
 
 	iterBig := big.NewInt(int64(iterations))
 	iterBytes := iterBig.Bytes()
 	iterBytes = append(make([]byte, 8-len(iterBytes)), iterBytes...)
-	n, err = file.Write(iterBytes)
+	n, err = writer.Write(iterBytes)
 	if err != nil {
 		return err
 	}
 	if n != len(iterBytes) {
 		return fmt.Errorf("Error writing secrets file")
 	}
-	authHMAC.Write(iterBytes)
 
 	cypher, err := aes.NewCipher(secretsEncKey)
 	if err != nil {
@@ -146,41 +144,38 @@ func writeSecrets(secrets *Secrets, path string) (err error) {
 	keyBuf := make([]byte, len(secrets.chunkEncryption))
 	cypher.Encrypt(keyBuf, secrets.chunkEncryption)
 	cypher.Encrypt(keyBuf[16:], secrets.chunkEncryption[16:])
-	n, err = file.Write(keyBuf)
+	n, err = writer.Write(keyBuf)
 	if err != nil {
 		return err
 	}
 	if n != len(keyBuf) {
 		return fmt.Errorf("Error writing secrets file")
 	}
-	authHMAC.Write(keyBuf)
 
 	keyBuf = make([]byte, len(secrets.chunkAuthentication))
 	cypher.Encrypt(keyBuf, secrets.chunkAuthentication)
 	cypher.Encrypt(keyBuf[16:], secrets.chunkAuthentication[16:])
-	n, err = file.Write(keyBuf)
+	n, err = writer.Write(keyBuf)
 	if err != nil {
 		return err
 	}
 	if n != len(keyBuf) {
 		return fmt.Errorf("Error writing secrets file")
 	}
-	authHMAC.Write(keyBuf)
 
 	keyBuf = make([]byte, len(secrets.chunkStorage))
 	cypher.Encrypt(keyBuf, secrets.chunkStorage)
 	cypher.Encrypt(keyBuf[16:], secrets.chunkStorage[16:])
 	cypher.Encrypt(keyBuf[32:], secrets.chunkStorage[32:])
-	n, err = file.Write(keyBuf)
+	n, err = writer.Write(keyBuf)
 	if err != nil {
 		return err
 	}
 	if n != len(keyBuf) {
 		return fmt.Errorf("Error writing secrets file")
 	}
-	authHMAC.Write(keyBuf)
 	authSum := authHMAC.Sum(nil)
-	n, err = file.Write(authSum)
+	n, err = writer.Write(authSum)
 	if err != nil {
 		return err
 	}
