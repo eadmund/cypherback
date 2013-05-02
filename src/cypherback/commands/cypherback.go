@@ -2,11 +2,11 @@ package main
 
 import (
 	"cypherback"
-	"os"
 	"fmt"
+	"os"
 )
 
-func die(format string, args... interface{}) {
+func die(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, format, args...)
 	os.Exit(1)
 }
@@ -27,7 +27,7 @@ func main() {
 		dieUsage()
 	}
 	if os.Args[1] == "secrets" {
-		if len (os.Args) < 3 {
+		if len(os.Args) < 3 {
 			dieUsage()
 		}
 		if os.Args[2] == "generate" {

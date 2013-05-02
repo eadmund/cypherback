@@ -1,10 +1,10 @@
 package cypherback
 
 import (
-	"os"
-	"path/filepath"
-	"os/user"
 	"fmt"
+	"os"
+	"os/user"
+	"path/filepath"
 )
 
 func ensureConfigDir() (path string, err error) {
@@ -13,7 +13,7 @@ func ensureConfigDir() (path string, err error) {
 		fmt.Fprintln(os.Stderr, err)
 		return "", err
 	}
-	homedir , err := filepath.EvalSymlinks(usr.HomeDir)
+	homedir, err := filepath.EvalSymlinks(usr.HomeDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return "", err
@@ -33,7 +33,7 @@ func ensureConfigDir() (path string, err error) {
 		}
 		return "", err
 	}
-	if info.Mode() & 0077 != 0 {
+	if info.Mode()&0077 != 0 {
 		return "", fmt.Errorf("Bad permissions on ~/.cypherback")
 	}
 	return configdir, nil

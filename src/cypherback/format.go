@@ -1,24 +1,24 @@
 package cypherback
 
 import (
-	"hash"
+	"compress/lzw"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/sha512"
 	"encoding/hex"
-	"path/filepath"
-	"os"
+	"fmt"
+	"hash"
 	"io"
 	"io/ioutil"
-	"fmt"
-	"crypto/hmac"
-"crypto/aes"
-"crypto/cipher"
-	"crypto/sha512"
-	"compress/lzw"
+	"os"
+	"path/filepath"
 	//"bufio"
 )
 
 type metadata struct {
-	path string
-	info os.FileInfo
+	path   string
+	info   os.FileInfo
 	chunks [][]byte
 }
 
@@ -27,7 +27,7 @@ emit all path/info tuples
 
 */
 
-func ProcessPath(path string, secrets *Secrets) (err error){
+func ProcessPath(path string, secrets *Secrets) (err error) {
 	chunks := make(chan []byte)
 	metadataChan := make(chan metadata)
 	go func() {
@@ -52,10 +52,10 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 	}
 	seenChunks := make(map[string][]byte)
 	storageHash := hmac.New(sha512.New384, secrets.chunkStorage)
-	return func (path string, info os.FileInfo, err error) error {
+	return func(path string, info os.FileInfo, err error) error {
 		metadataChan <- metadata{path, info, nil}
 		//fmt.Println(path, info.Name(), info.Size(), info.Mode(), info.ModTime())
-		if info.Size() > 0 && info.Mode() & os.ModeType == 0 {
+		if info.Size() > 0 && info.Mode()&os.ModeType == 0 {
 			fmt.Println(path)
 			file, err := os.Open(path)
 			if err != nil {
@@ -110,9 +110,9 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 }
 
 type encWriter struct {
-	writer io.Writer
-	buf []byte
-	cypher cipher.BlockMode
+	writer   io.Writer
+	buf      []byte
+	cypher   cipher.BlockMode
 	authHMAC hash.Hash
 }
 
@@ -146,7 +146,7 @@ func newEncWriter(w io.Writer, secrets *Secrets) (*encWriter, error) {
 	authHMAC.Write([]byte{0}) // file version
 	return &encWriter{w, make([]byte, 0), cypher, authHMAC}, nil
 }
-	
+
 func pad(b []byte) []byte {
 	padLen := -((len(b) % 16) - 16)
 	fmt.Println(len(b), padLen)

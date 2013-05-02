@@ -1,24 +1,26 @@
 package cypherback
 
 import (
-	"io"
-	"math/big"
+	"bitbucket.org/taruti/termios"
 	"bytes"
-	"os"
+	"code.google.com/p/go.crypto/pbkdf2"
 	"crypto/aes"
-	"crypto/rand"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha512"
 	"fmt"
-	"bitbucket.org/taruti/termios"
+	"io"
+	"math/big"
+	"os"
 	"path/filepath"
-	"code.google.com/p/go.crypto/pbkdf2"
 	//"time"
 )
 
 type Secrets struct {
-	chunkEncryption []byte
+	// AES-256 keys
+	chunkEncryption     []byte
 	chunkAuthentication []byte
+	// HMAC-SHA-384 key
 	chunkStorage []byte
 }
 
@@ -47,14 +49,14 @@ func GenerateSecrets() (err error) {
 	if err != nil {
 		return err
 	}
-	secrets.chunkStorage, err = genKey(32)
+	secrets.chunkStorage, err = genKey(48)
 	if err != nil {
 		return err
 	}
 	configDir, err := ensureConfigDir()
 	if err != nil {
 		return err
-	}			
+	}
 	secretsPath := filepath.Join(configDir, "secrets")
 	err = writeSecrets(secrets, secretsPath)
 	if err != nil {
@@ -66,6 +68,25 @@ func GenerateSecrets() (err error) {
 }
 
 func writeSecrets(secrets *Secrets, path string) (err error) {
+	/*
+	To write a secrets file:
+
+	PBKDF2 the user's password with a random 32-byte salt under SHA-384;
+	use this to generate 80 bytes of keying material.  The first 32 bytes
+	form an AES-256 encryption key; the next 48 bytes form an HMAC-SHA-384
+	authentication key.
+
+	Byte Length
+	 00    1    File version (0 for this version)
+	 01   32    Salt
+	 33    8    Number of PBKDF2 iterations
+	 41   32    AES-256-ECB(encryption key, chunk encryption key)
+	 73   32    AES-256-ECB(encryption key, chunk authentication key)
+	105   48    AES-256-ECB(encryption key, chunk storage key)
+	153   48    HMAC-SHA-384(authentication key, bytes 00-152)
+
+	*/
+
 	passphrase := termios.PasswordConfirm("Enter passphrase: ", "Repeat passphrase: ")
 	salt := make([]byte, 32)
 	n, err := rand.Reader.Read(salt)
@@ -146,10 +167,10 @@ func writeSecrets(secrets *Secrets, path string) (err error) {
 	}
 	authHMAC.Write(keyBuf)
 
-
 	keyBuf = make([]byte, len(secrets.chunkStorage))
 	cypher.Encrypt(keyBuf, secrets.chunkStorage)
 	cypher.Encrypt(keyBuf[16:], secrets.chunkStorage[16:])
+	cypher.Encrypt(keyBuf[32:], secrets.chunkStorage[32:])
 	n, err = file.Write(keyBuf)
 	if err != nil {
 		return err
@@ -166,7 +187,7 @@ func writeSecrets(secrets *Secrets, path string) (err error) {
 	if n != len(authSum) {
 		return fmt.Errorf("Error writing secrets file")
 	}
-	
+
 	return nil
 }
 
@@ -174,14 +195,14 @@ func ReadSecrets() (secrets *Secrets, err error) {
 	configDir, err := ensureConfigDir()
 	if err != nil {
 		return nil, err
-	}			
+	}
 	secretsPath := filepath.Join(configDir, "secrets")
 	return readSecrets(secretsPath)
 }
 
 func readSecrets(path string) (secrets *Secrets, err error) {
 	passphrase := termios.Password("Enter passphrase: ")
-	
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -198,12 +219,12 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	if version[0] != 0 {
 		return nil, fmt.Errorf("Cannot read file version %d", version[0])
 	}
- 
+
 	salt := make([]byte, 32)
 	n, err = file.Read(salt)
 	if err != nil {
 		return nil, err
-	} 
+	}
 	if n != len(salt) {
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
@@ -219,8 +240,10 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	iterBig := big.NewInt(0)
 	iterBig.SetBytes(iterBytes)
 	iterations := int(iterBig.Int64())
-	
 
+	// FIXME: add some code to the iterations and rewrite the file
+	// if the time to generate a key is too far from the target of 1
+	// second
 	secretsKeys := pbkdf2.Key([]byte(passphrase), salt, iterations, 80, sha512.New384)
 	secretsEncKey := secretsKeys[:32]
 	secretsAuthKey := secretsKeys[32:]
@@ -232,12 +255,12 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	cypher, err := aes.NewCipher(secretsEncKey)
 	if err != nil {
 		return nil, err
-	}	
+	}
 
 	secrets = &Secrets{}
 	secrets.chunkEncryption = make([]byte, 32)
 	secrets.chunkAuthentication = make([]byte, 32)
-	secrets.chunkStorage = make([]byte, 32)
+	secrets.chunkStorage = make([]byte, 48)
 
 	keyBuf := make([]byte, len(secrets.chunkEncryption))
 	n, err = file.Read(keyBuf)
@@ -274,7 +297,7 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	authHMAC.Write(keyBuf)
 	cypher.Decrypt(secrets.chunkStorage, keyBuf)
 	cypher.Decrypt(secrets.chunkStorage[16:], keyBuf[16:])
-
+	cypher.Decrypt(secrets.chunkStorage[32:], keyBuf[32:])
 
 	authSum := make([]byte, authHMAC.Size())
 	n, err = file.Read(authSum)
