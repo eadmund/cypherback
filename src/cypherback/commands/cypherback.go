@@ -19,14 +19,10 @@ func dieUsage() {
 
 func main() {
 	if len(os.Args) < 2 {
-		secrets, err := cypherback.ReadSecrets()
-		if err != nil {
-			die("Error: %v", err)
-		}
-		fmt.Println(secrets)
 		dieUsage()
 	}
-	if os.Args[1] == "secrets" {
+	switch os.Args[1] {
+	case "secrets":
 		if len(os.Args) < 3 {
 			dieUsage()
 		}
@@ -38,17 +34,24 @@ func main() {
 		} else {
 			die("Unknown secrets command %s", os.Args[2])
 		}
-	} else {
+	case "process":
+		if len(os.Args) < 3 {
+			dieUsage()
+		}
+		var paths []string
+		paths = append(paths, os.Args[2])
+
+		secrets, err := cypherback.ReadSecrets()
+		if err != nil {
+			die("Error: %v", err)
+		}
+
+		for _, path := range paths {
+			cypherback.ProcessPath(path, secrets)
+		}	
+	default:
 		die("Unknown command %s", os.Args[1])
 	}
 
-	/*var paths []string
-	if len(os.Args) == 2 {
-		paths = append(paths, os.Args[1])
-	} else {
-		paths = append(paths, ".")
-	}
-	for _, path := range paths {
-		cypherback.ProcessPath(path)
-	}*/
+	/**/
 }

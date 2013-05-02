@@ -36,7 +36,7 @@ Byte Length
   -   48    HMAC-SHA-384(chunk authentication key, all preceding bytes)
 
 Each chunk is stored to the backing store under the name
-HMAC-SHA-384(chunk storage key). 
+HMAC-SHA-384(chunk storage key, plaintext). 
 
 */
 
@@ -73,6 +73,7 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 	return func(path string, info os.FileInfo, err error) error {
 		metadataChan <- metadata{path, info, nil}
 		//fmt.Println(path, info.Name(), info.Size(), info.Mode(), info.ModTime())
+		fmt.Println(path, info)
 		if info.Size() > 0 && info.Mode()&os.ModeType == 0 {
 			fmt.Println(path)
 			file, err := os.Open(path)
@@ -80,19 +81,15 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 				return err
 			}
 			chunk := make([]byte, 256*1024)
+			plaintext := io.TeeReader(file, storageHash)
 			for {
 				storageHash.Reset()
-				n, readErr := file.Read(chunk)
+				n, readErr := plaintext.Read(chunk)
 				if n == 0 {
 					if readErr != nil && readErr != io.EOF {
 						return err
 					}
 					break
-				}
-				//fmt.Println(chunk[:n])
-				_, err = storageHash.Write(chunk[:n])
-				if err != nil {
-					return err
 				}
 				storageLoc := storageHash.Sum(nil)
 				fmt.Println(hex.EncodeToString(storageLoc))
@@ -134,6 +131,8 @@ type encWriter struct {
 	iv       []byte
 	authHMAC hash.Hash
 }
+
+// FIXME: the semantics of an encWriter are goofy
 
 func (ew encWriter) Write(b []byte) (int, error) {
 	ew.buf = append(ew.buf, b...)
@@ -188,14 +187,4 @@ func newEncWriter(w io.Writer, secrets *Secrets) (*encWriter, error) {
 	authHMAC := hmac.New(sha512.New384, secrets.chunkAuthentication)
 	authHMAC.Write([]byte{0}) // file version
 	return &encWriter{w, make([]byte, 0), cypher, iv, authHMAC}, nil
-}
-
-func pad(b []byte) []byte {
-	padLen := -((len(b) % 256) - 256)
-	fmt.Println(len(b), padLen)
-	padding := make([]byte, padLen)
-	for i := range padding {
-		padding[i] = byte(padLen)
-	}
-	return append(b, padding...)
 }
