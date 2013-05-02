@@ -247,6 +247,7 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	authHMAC.Write(salt)
 	authHMAC.Write(iterBytes)
 
+	reader := io.TeeReader(file, authHMAC)
 	cypher, err := aes.NewCipher(secretsEncKey)
 	if err != nil {
 		return nil, err
@@ -258,51 +259,49 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	secrets.chunkStorage = make([]byte, 48)
 
 	keyBuf := make([]byte, len(secrets.chunkEncryption))
-	n, err = file.Read(keyBuf)
+	n, err = reader.Read(keyBuf)
 	if err != nil {
 		return nil, err
 	}
 	if n != len(keyBuf) {
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
-	authHMAC.Write(keyBuf)
 	cypher.Decrypt(secrets.chunkEncryption, keyBuf)
 	cypher.Decrypt(secrets.chunkEncryption[16:], keyBuf[16:])
 
 	keyBuf = make([]byte, len(secrets.chunkAuthentication))
-	n, err = file.Read(keyBuf)
+	n, err = reader.Read(keyBuf)
 	if err != nil {
 		return nil, err
 	}
 	if n != len(keyBuf) {
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
-	authHMAC.Write(keyBuf)
 	cypher.Decrypt(secrets.chunkAuthentication, keyBuf)
 	cypher.Decrypt(secrets.chunkAuthentication[16:], keyBuf[16:])
 
 	keyBuf = make([]byte, len(secrets.chunkStorage))
-	n, err = file.Read(keyBuf)
+	n, err = reader.Read(keyBuf)
 	if err != nil {
 		return nil, err
 	}
 	if n != len(keyBuf) {
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
-	authHMAC.Write(keyBuf)
 	cypher.Decrypt(secrets.chunkStorage, keyBuf)
 	cypher.Decrypt(secrets.chunkStorage[16:], keyBuf[16:])
 	cypher.Decrypt(secrets.chunkStorage[32:], keyBuf[32:])
-
+	
+	calcSum := authHMAC.Sum(nil)
 	authSum := make([]byte, authHMAC.Size())
-	n, err = file.Read(authSum)
+	n, err = reader.Read(authSum)
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
 	if n != len(authSum) {
 		return nil, fmt.Errorf("Error reading secrets file: %d", n)
 	}
-	if !bytes.Equal(authHMAC.Sum(nil), authSum) {
+	if !bytes.Equal(calcSum, authSum) {
 		return nil, fmt.Errorf("Corrupted secrets file")
 	}
 	return secrets, nil
