@@ -84,7 +84,7 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 				storageHash.Reset()
 				n, readErr := file.Read(chunk)
 				if n == 0 {
-					if err != nil && err != io.EOF {
+					if readErr != nil && readErr != io.EOF {
 						return err
 					}
 					break

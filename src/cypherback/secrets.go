@@ -69,21 +69,21 @@ func GenerateSecrets() (err error) {
 
 func writeSecrets(secrets *Secrets, path string) (err error) {
 	/*
-	To write a secrets file:
+		To write a secrets file:
 
-	PBKDF2 the user's password with a random 32-byte salt under SHA-384;
-	use this to generate 80 bytes of keying material.  The first 32 bytes
-	form an AES-256 encryption key; the next 48 bytes form an HMAC-SHA-384
-	authentication key.
+		PBKDF2 the user's password with a random 32-byte salt under SHA-384;
+		use this to generate 80 bytes of keying material.  The first 32 bytes
+		form an AES-256 encryption key; the next 48 bytes form an HMAC-SHA-384
+		authentication key.
 
-	Byte Length
-	 00    1    File version (0 for this version)
-	 01   32    Salt
-	 33    8    Number of PBKDF2 iterations
-	 41   32    AES-256-ECB(encryption key, chunk encryption key)
-	 73   32    AES-256-ECB(encryption key, chunk authentication key)
-	105   48    AES-256-ECB(encryption key, chunk storage key)
-	153   48    HMAC-SHA-384(authentication key, bytes 00-152)
+		Byte Length
+		 00    1    File version (0 for this version)
+		 01   32    Salt
+		 33    8    Number of PBKDF2 iterations
+		 41   32    AES-256-ECB(encryption key, chunk encryption key)
+		 73   32    AES-256-ECB(encryption key, chunk authentication key)
+		105   48    AES-256-ECB(encryption key, chunk storage key)
+		153   48    HMAC-SHA-384(authentication key, bytes 00-152)
 
 	*/
 
@@ -291,7 +291,7 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	cypher.Decrypt(secrets.chunkStorage, keyBuf)
 	cypher.Decrypt(secrets.chunkStorage[16:], keyBuf[16:])
 	cypher.Decrypt(secrets.chunkStorage[32:], keyBuf[32:])
-	
+
 	calcSum := authHMAC.Sum(nil)
 	authSum := make([]byte, authHMAC.Size())
 	n, err = reader.Read(authSum)
