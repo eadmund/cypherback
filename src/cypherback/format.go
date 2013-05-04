@@ -68,12 +68,11 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 	if err != nil {
 		return nil, err
 	}
-	seenChunks := make(map[string][]byte)
+	seenChunks := make(map[string]bool)
 	storageHash := hmac.New(sha512.New384, secrets.chunkStorage)
 	return func(path string, info os.FileInfo, err error) error {
 		metadataChan <- metadata{path, info, nil}
 		//fmt.Println(path, info.Name(), info.Size(), info.Mode(), info.ModTime())
-		fmt.Println(path, info)
 		if info.Size() > 0 && info.Mode()&os.ModeType == 0 {
 			fmt.Println(path)
 			file, err := os.Open(path)
@@ -92,6 +91,10 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 					break
 				}
 				storageLoc := storageHash.Sum(nil)
+				// skip processing if we've seen this before
+				if seenChunks[string(storageLoc)] {
+					continue
+				}
 				fmt.Println(hex.EncodeToString(storageLoc))
 				//fmt.Println(string(chunk[:n]))
 				chunkFile, err := os.Create(tempDir + "/" + hex.EncodeToString(storageLoc))
@@ -110,7 +113,7 @@ func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan m
 				if err != nil {
 					return err
 				}
-				seenChunks[string(storageLoc)] = []byte("he")
+				seenChunks[string(storageLoc)] = true
 				if readErr != nil {
 					break
 				}
@@ -136,8 +139,6 @@ type encWriter struct {
 
 func (ew encWriter) Write(b []byte) (int, error) {
 	ew.buf = append(ew.buf, b...)
-	fmt.Println(len(ew.buf))
-	ew.authHMAC.Write(b)
 	return len(b), nil
 }
 

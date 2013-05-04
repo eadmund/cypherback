@@ -34,12 +34,15 @@ func main() {
 		} else {
 			die("Unknown secrets command %s", os.Args[2])
 		}
-	case "process":
-		if len(os.Args) < 3 {
+	case "backup":
+		if len(os.Args) < 4 {
 			dieUsage()
 		}
+		setName := os.Args[2]
 		var paths []string
-		paths = append(paths, os.Args[2])
+		paths = append(paths, os.Args[3:]...)
+		
+		set := cypherback.EnsureSet(secrets, setName)
 
 		secrets, err := cypherback.ReadSecrets()
 		if err != nil {
@@ -52,6 +55,4 @@ func main() {
 	default:
 		die("Unknown command %s", os.Args[1])
 	}
-
-	/**/
 }

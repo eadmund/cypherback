@@ -22,3 +22,5 @@
 * CLI
 ** cypherback secrets generate [-plaintext-tag TAG]
 *** generate secrets file, with optional plaintext name TAG (otherwise is named with a random 128-bit hex string)
+** cypherback backup TAG PATH...
+*** generate a backup set named TAG; add each PATH to it
