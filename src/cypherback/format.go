@@ -2,9 +2,9 @@ package cypherback
 
 import (
 	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha512"
-	"crypto/cipher"
 	"fmt"
 	"hash"
 	"io"

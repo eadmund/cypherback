@@ -3,31 +3,31 @@
 package cypherback
 
 import (
-"io/ioutil"
-"compress/lzw"
-"path/filepath"
-"encoding/hex"
-	"fmt"
-"crypto/hmac"
+	"compress/lzw"
+	"crypto/hmac"
 	"crypto/sha512"
+	"encoding/hex"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/user"
-	"time"
+	"path/filepath"
 	"syscall"
+	"time"
 )
 
 type devInode struct {
-	dev uint64
+	dev   uint64
 	inode uint64
 }
 
 type BackupSet struct {
-	secrets *Secrets
-	records []fileRecord
-	hardLinks map[devInode]string
+	secrets    *Secrets
+	records    []fileRecord
+	hardLinks  map[devInode]string
 	seenChunks map[string]bool
-	tempDir string
+	tempDir    string
 }
 
 func newBackupSet(secrets *Secrets) (backupSet *BackupSet, err error) {
@@ -42,27 +42,26 @@ func newBackupSet(secrets *Secrets) (backupSet *BackupSet, err error) {
 }
 
 type fileRecord interface {
-	
 }
 
 // FIXME: handle extended attributes
 
 type baseFileInfo struct {
-	name string
-	mode os.FileMode
-	userName string
+	name      string
+	mode      os.FileMode
+	userName  string
 	groupName string
-	uid uint32
-	gid uint32
-	aTime time.Time
-	mTime time.Time
-	cTime time.Time
+	uid       uint32
+	gid       uint32
+	aTime     time.Time
+	mTime     time.Time
+	cTime     time.Time
 }
 
 type regularFileInfo struct {
 	baseFileInfo
-	size int64
-	//chunks []chunk
+	size   int64
+	chunks []string
 }
 
 type fifoInfo struct {
@@ -70,7 +69,7 @@ type fifoInfo struct {
 }
 
 type hardLinkInfo struct {
-	name string
+	name     string
 	linkPath string
 }
 
@@ -108,17 +107,17 @@ func (b *BackupSet) fileRecordFromFileInfo(path string, info os.FileInfo) (recor
 	}
 	mode := info.Mode()
 	switch {
-	case mode & os.ModeDir != 0:
+	case mode&os.ModeDir != 0:
 		record = b.newDirectoryInfo(path, info)
-	case mode & os.ModeSymlink != 0:
+	case mode&os.ModeSymlink != 0:
 		path, err := os.Readlink(info.Name())
 		if err != nil {
 			return nil, err
 		}
 		record = symLinkInfo{b.newBaseFileInfo(path, info), path}
-	case mode & os.ModeDevice != 0:
+	case mode&os.ModeDevice != 0:
 		if statOk {
-			if mode & os.ModeCharDevice != 0 {
+			if mode&os.ModeCharDevice != 0 {
 				record = charDeviceInfo{deviceInfo{b.newBaseFileInfo(path, info), stat.Rdev}}
 			} else {
 				record = blockDeviceInfo{deviceInfo{b.newBaseFileInfo(path, info), stat.Rdev}}
@@ -126,9 +125,9 @@ func (b *BackupSet) fileRecordFromFileInfo(path string, info os.FileInfo) (recor
 		} else {
 			return nil, fmt.Errorf("Cannot handle device file " + info.Name())
 		}
-	case mode & os.ModeNamedPipe != 0:
+	case mode&os.ModeNamedPipe != 0:
 		record = fifoInfo{b.newBaseFileInfo(path, info)}
-	case mode & os.ModeSocket != 0:
+	case mode&os.ModeSocket != 0:
 		return nil, fmt.Errorf("Cannot handle sockets")
 	default:
 		record, err = b.newRegularFileInfo(path, info)
@@ -147,6 +146,8 @@ func (b *BackupSet) newDirectoryInfo(path string, info os.FileInfo) directoryInf
 }
 
 func (b *BackupSet) newRegularFileInfo(path string, info os.FileInfo) (fileInfo *regularFileInfo, err error) {
+	baseFileInfo := b.newBaseFileInfo(path, info)
+	fileInfo = &regularFileInfo{baseFileInfo, info.Size(), make([]string, 0)}
 	if info.Size() > 0 {
 		storageHash := hmac.New(sha512.New384, b.secrets.chunkStorage)
 		file, err := os.Open(path)
@@ -155,9 +156,11 @@ func (b *BackupSet) newRegularFileInfo(path string, info os.FileInfo) (fileInfo 
 		}
 		chunk := make([]byte, 256*1024)
 		plaintext := io.TeeReader(file, storageHash)
+		var readErr error
 		for {
 			storageHash.Reset()
-			n, readErr := plaintext.Read(chunk)
+			var n int
+			n, readErr = plaintext.Read(chunk)
 			if n == 0 {
 				if readErr != nil && readErr != io.EOF {
 					return nil, err
@@ -169,7 +172,8 @@ func (b *BackupSet) newRegularFileInfo(path string, info os.FileInfo) (fileInfo 
 			if b.seenChunks[string(storageLoc)] {
 				continue
 			}
-			chunkPath := filepath.Join(b.tempDir, hex.EncodeToString(storageLoc))
+			hexStorageLoc := hex.EncodeToString(storageLoc)
+			chunkPath := filepath.Join(b.tempDir, hexStorageLoc)
 			chunkFile, err := os.Create(chunkPath)
 			if err != nil {
 				return nil, err
@@ -186,21 +190,21 @@ func (b *BackupSet) newRegularFileInfo(path string, info os.FileInfo) (fileInfo 
 			if err != nil {
 				return nil, err
 			}
+			fileInfo.chunks = append(fileInfo.chunks, hexStorageLoc)
 			b.seenChunks[string(storageLoc)] = true
 			if readErr != nil {
 				break
 			}
 		}
-		if err != io.EOF {
+		if readErr != io.EOF {
 			return nil, err
 		}
 	}
-	baseFileInfo := b.newBaseFileInfo(path, info)
-	fileInfo = &regularFileInfo{baseFileInfo, info.Size()}
+	fmt.Println(info.Size(), fileInfo.chunks)
 	return fileInfo, nil
 }
 
-func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) (baseFileInfo) {
+func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) baseFileInfo {
 	stat := info.Sys()
 	switch stat := stat.(type) {
 	case *syscall.Stat_t:
@@ -215,13 +219,13 @@ func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) (baseFileInfo
 		cTime := time.Unix(stat.Ctim.Sec, stat.Ctim.Nsec)
 		mTime := time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
 		return baseFileInfo{name: info.Name(),
-			mode: info.Mode(),//os.FileMode(stat.Mode),
-			uid: stat.Uid,
-			gid: stat.Gid,
+			mode:     info.Mode(), //os.FileMode(stat.Mode),
+			uid:      stat.Uid,
+			gid:      stat.Gid,
 			userName: userName,
-			aTime: aTime,
-			cTime: cTime,
-			mTime: mTime}
+			aTime:    aTime,
+			cTime:    cTime,
+			mTime:    mTime}
 	default:
 		return baseFileInfo{name: info.Name(),
 			mode: info.Mode()}
