@@ -18,6 +18,14 @@ There are four keys in use: a 256-bit metadata encryption key; a
 256-bit chunk encryption key; a 384-bit chunk authentication key; and
 a 384-bit chunk storage key.
 
+Secrets
+-------
+
+A secrets file encapsulates a set of keys.  It is encrypted under a
+key encryption key derived from the user's passphrase using PBKDF2
+under a numbe of iterations intended to last approximately 1 second.
+FIXME: follow the NIST key wrap specification.
+
 Backup sets
 -----------
 
