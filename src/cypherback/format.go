@@ -1,16 +1,13 @@
 package cypherback
 
 import (
-	"compress/lzw"
 	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha512"
-	"encoding/hex"
+	"crypto/cipher"
 	"fmt"
 	"hash"
 	"io"
-	"io/ioutil"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -45,86 +42,26 @@ emit all path/info tuples
 
 */
 
-func ProcessPath(path string, secrets *Secrets) (err error) {
-	chunks := make(chan []byte)
-	metadataChan := make(chan metadata)
-	go func() {
-		walkfunc, err := makeFileProcessor(secrets, chunks, metadataChan)
-		if err == nil {
-			filepath.Walk(path, walkfunc)
-		}
-		close(chunks)
-		close(metadataChan)
-	}()
-	for m := range metadataChan {
-		_ = m
-		//fmt.Println(m.path, m.info.Size(), m.info.Mode(), m.info.ModTime())
-	}
-	return nil
-}
+// v1: simply make a file info structure for each file or directory
+// found, appending to a list which is return; in later versions, do
+// smarter things like having workers &c.
 
-func makeFileProcessor(secrets *Secrets, chunks chan []byte, metadataChan chan metadata) (filepath.WalkFunc, error) {
-	tempDir, err := ioutil.TempDir("/tmp/", "cypherback")
+func ProcessPath(path string, secrets *Secrets) (err error) {
+	backupSet, err := newBackupSet(secrets)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	seenChunks := make(map[string]bool)
-	storageHash := hmac.New(sha512.New384, secrets.chunkStorage)
-	return func(path string, info os.FileInfo, err error) error {
-		metadataChan <- metadata{path, info, nil}
-		//fmt.Println(path, info.Name(), info.Size(), info.Mode(), info.ModTime())
-		if info.Size() > 0 && info.Mode()&os.ModeType == 0 {
-			fmt.Println(path)
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			chunk := make([]byte, 256*1024)
-			plaintext := io.TeeReader(file, storageHash)
-			for {
-				storageHash.Reset()
-				n, readErr := plaintext.Read(chunk)
-				if n == 0 {
-					if readErr != nil && readErr != io.EOF {
-						return err
-					}
-					break
-				}
-				storageLoc := storageHash.Sum(nil)
-				// skip processing if we've seen this before
-				if seenChunks[string(storageLoc)] {
-					continue
-				}
-				fmt.Println(hex.EncodeToString(storageLoc))
-				//fmt.Println(string(chunk[:n]))
-				chunkFile, err := os.Create(tempDir + "/" + hex.EncodeToString(storageLoc))
-				if err != nil {
-					return err
-				}
-				defer chunkFile.Close()
-				encryptor, err := newEncWriter(chunkFile, secrets)
-				if err != nil {
-					return err
-				}
-				defer encryptor.Close()
-				compressor := lzw.NewWriter(encryptor, lzw.LSB, 8)
-				defer compressor.Close()
-				_, err = compressor.Write(chunk[:n])
-				if err != nil {
-					return err
-				}
-				seenChunks[string(storageLoc)] = true
-				if readErr != nil {
-					break
-				}
-			}
-			if err != io.EOF {
-				return err
-			}
+	walkfunc := func(path string, info os.FileInfo, err error) error {
+		record, err := backupSet.fileRecordFromFileInfo(path, info)
+		if err != nil {
+			return err
 		}
+		backupSet.records = append(backupSet.records, record)
 		return nil
-	}, nil
-	//return processFile
+	}
+	filepath.Walk(path, walkfunc)
+	fmt.Println(backupSet)
+	return nil
 }
 
 type encWriter struct {

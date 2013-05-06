@@ -36,35 +36,40 @@ func genKey(length int) (key []byte, err error) {
 	return key, nil
 }
 
-func GenerateSecrets() (err error) {
-	if err != nil {
-		return err
-	}
-	secrets := &Secrets{}
+func generateSecrets() (secrets *Secrets, err error) {
+	secrets = &Secrets{}
 	secrets.chunkEncryption, err = genKey(32)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	secrets.chunkAuthentication, err = genKey(32)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	secrets.chunkStorage, err = genKey(48)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	return secrets, err
+}
+
+func GenerateSecrets() (secrets *Secrets, err error) {
+	secrets, err = generateSecrets()
+	if err != nil {
+		return nil, err
 	}
 	configDir, err := ensureConfigDir()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	secretsPath := filepath.Join(configDir, "secrets")
 	err = writeSecrets(secrets, secretsPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fmt.Println(secrets)
 
-	return nil
+	return secrets, nil
 }
 
 func writeSecrets(secrets *Secrets, path string) (err error) {

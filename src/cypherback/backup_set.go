@@ -3,7 +3,14 @@
 package cypherback
 
 import (
+"io/ioutil"
+"compress/lzw"
+"path/filepath"
+"encoding/hex"
 	"fmt"
+"crypto/hmac"
+	"crypto/sha512"
+	"io"
 	"os"
 	"os/user"
 	"time"
@@ -19,6 +26,19 @@ type BackupSet struct {
 	secrets *Secrets
 	records []fileRecord
 	hardLinks map[devInode]string
+	seenChunks map[string]bool
+	tempDir string
+}
+
+func newBackupSet(secrets *Secrets) (backupSet *BackupSet, err error) {
+	backupSet = &BackupSet{secrets: secrets}
+	backupSet.hardLinks = make(map[devInode]string)
+	backupSet.seenChunks = make(map[string]bool)
+	backupSet.tempDir, err = ioutil.TempDir("/tmp/", "cypherback")
+	if err != nil {
+		return nil, err
+	}
+	return backupSet, nil
 }
 
 type fileRecord interface {
@@ -77,7 +97,7 @@ type directoryInfo struct {
 	//contents []BaseFileInfo
 }
 
-func (b *BackupSet) fileRecordFromFileInfo(info os.FileInfo) (record fileRecord, err error) {
+func (b *BackupSet) fileRecordFromFileInfo(path string, info os.FileInfo) (record fileRecord, err error) {
 	stat, statOk := info.Sys().(syscall.Stat_t)
 	var inode devInode
 	if statOk {
@@ -89,29 +109,29 @@ func (b *BackupSet) fileRecordFromFileInfo(info os.FileInfo) (record fileRecord,
 	mode := info.Mode()
 	switch {
 	case mode & os.ModeDir != 0:
-		record = b.newDirectoryInfo(info)
+		record = b.newDirectoryInfo(path, info)
 	case mode & os.ModeSymlink != 0:
 		path, err := os.Readlink(info.Name())
 		if err != nil {
 			return nil, err
 		}
-		record = symLinkInfo{b.newBaseFileInfo(info), path}
+		record = symLinkInfo{b.newBaseFileInfo(path, info), path}
 	case mode & os.ModeDevice != 0:
 		if statOk {
 			if mode & os.ModeCharDevice != 0 {
-				record = charDeviceInfo{deviceInfo{b.newBaseFileInfo(info), stat.Rdev}}
+				record = charDeviceInfo{deviceInfo{b.newBaseFileInfo(path, info), stat.Rdev}}
 			} else {
-				record = blockDeviceInfo{deviceInfo{b.newBaseFileInfo(info), stat.Rdev}}
+				record = blockDeviceInfo{deviceInfo{b.newBaseFileInfo(path, info), stat.Rdev}}
 			}
 		} else {
 			return nil, fmt.Errorf("Cannot handle device file " + info.Name())
 		}
 	case mode & os.ModeNamedPipe != 0:
-		record = fifoInfo{b.newBaseFileInfo(info)}
+		record = fifoInfo{b.newBaseFileInfo(path, info)}
 	case mode & os.ModeSocket != 0:
 		return nil, fmt.Errorf("Cannot handle sockets")
 	default:
-		record, err = b.newRegularFileInfo(info)
+		record, err = b.newRegularFileInfo(path, info)
 		if err != nil {
 			return nil, err
 		}
@@ -122,20 +142,68 @@ func (b *BackupSet) fileRecordFromFileInfo(info os.FileInfo) (record fileRecord,
 	return record, nil
 }
 
-func (b *BackupSet) newDirectoryInfo(info os.FileInfo) directoryInfo {
-	return directoryInfo{b.newBaseFileInfo(info)}
+func (b *BackupSet) newDirectoryInfo(path string, info os.FileInfo) directoryInfo {
+	return directoryInfo{b.newBaseFileInfo(path, info)}
 }
 
-func (b *BackupSet) newRegularFileInfo(info os.FileInfo) (fileInfo regularFileInfo, err error) {
-	// FIXME: chunk file here
-	fileInfo = regularFileInfo{b.newBaseFileInfo(info), info.Size()}
+func (b *BackupSet) newRegularFileInfo(path string, info os.FileInfo) (fileInfo *regularFileInfo, err error) {
+	if info.Size() > 0 {
+		storageHash := hmac.New(sha512.New384, b.secrets.chunkStorage)
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		chunk := make([]byte, 256*1024)
+		plaintext := io.TeeReader(file, storageHash)
+		for {
+			storageHash.Reset()
+			n, readErr := plaintext.Read(chunk)
+			if n == 0 {
+				if readErr != nil && readErr != io.EOF {
+					return nil, err
+				}
+				break
+			}
+			storageLoc := storageHash.Sum(nil)
+			// skip processing if we've seen this before
+			if b.seenChunks[string(storageLoc)] {
+				continue
+			}
+			chunkPath := filepath.Join(b.tempDir, hex.EncodeToString(storageLoc))
+			chunkFile, err := os.Create(chunkPath)
+			if err != nil {
+				return nil, err
+			}
+			defer chunkFile.Close()
+			encryptor, err := newEncWriter(chunkFile, b.secrets)
+			if err != nil {
+				return nil, err
+			}
+			defer encryptor.Close()
+			compressor := lzw.NewWriter(encryptor, lzw.LSB, 8)
+			defer compressor.Close()
+			_, err = compressor.Write(chunk[:n])
+			if err != nil {
+				return nil, err
+			}
+			b.seenChunks[string(storageLoc)] = true
+			if readErr != nil {
+				break
+			}
+		}
+		if err != io.EOF {
+			return nil, err
+		}
+	}
+	baseFileInfo := b.newBaseFileInfo(path, info)
+	fileInfo = &regularFileInfo{baseFileInfo, info.Size()}
 	return fileInfo, nil
 }
 
-func (b *BackupSet) newBaseFileInfo(info os.FileInfo) (baseFileInfo) {
+func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) (baseFileInfo) {
 	stat := info.Sys()
 	switch stat := stat.(type) {
-	case syscall.Stat_t:
+	case *syscall.Stat_t:
 		user, err := user.LookupId(fmt.Sprintf("%d", stat.Uid))
 		var userName string
 		if err != nil {
@@ -147,7 +215,7 @@ func (b *BackupSet) newBaseFileInfo(info os.FileInfo) (baseFileInfo) {
 		cTime := time.Unix(stat.Ctim.Sec, stat.Ctim.Nsec)
 		mTime := time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
 		return baseFileInfo{name: info.Name(),
-			mode: os.FileMode(stat.Mode),
+			mode: info.Mode(),//os.FileMode(stat.Mode),
 			uid: stat.Uid,
 			gid: stat.Gid,
 			userName: userName,

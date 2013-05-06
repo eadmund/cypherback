@@ -12,9 +12,17 @@ func TestDirectoryInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := backupset.fileRecordFromFileInfo(info)
+	rec, err := backupset.fileRecordFromFileInfo(".", info)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Log(rec)
+}
+
+func TestFileInfo(t *testing.T) {
+	secrets, err := generateSecrets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ProcessPath(".", secrets)
 }
