@@ -24,7 +24,7 @@ Secrets
 A secrets file encapsulates a set of keys.  It is encrypted under a
 key encryption key derived from the user's passphrase using PBKDF2
 under a numbe of iterations intended to last approximately 1 second.
-FIXME: follow the NIST key wrap specification.
+FIXME: follow the NIST key wrap specification, or RFC 5297.
 
 Backup sets
 -----------
