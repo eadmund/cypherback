@@ -368,6 +368,9 @@ func ZeroSecrets(secrets *Secrets) {
 // then panic with an error
 func zeroKey(key []byte, length int, description string) {
 	if len(key) != length {
+		// FIXME: is panicing the right thing to do here?  It
+		// prevents further zeroing.  Perhaps it should be
+		// logged, to allow completiong of zeroing.
 		panic(fmt.Errorf("SERIOUS ERROR: %s is %d bytes, not %d bytes.  Destroy all items encrypted under this scheme.", description, len(key), length))
 	}
 	for i := 0; i < length; i++ {
