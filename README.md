@@ -15,7 +15,7 @@ Keys
 ----
 
 There are five keys in use: a 256-bit metadata encryption key; a
-256-bit metadata authentication key; a 384-bit chunk master key; a
+384-bit metadata authentication key; a 384-bit chunk master key; a
 384-bit chunk authentication key; and a 384-bit chunk storage key.
 There is also a 64-bit metadata nonce.
 
