@@ -232,3 +232,8 @@ func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) baseFileInfo 
 	}
 	panic("Can't get here")
 }
+
+// EnsureSet will return the backup set named NAME, creating it if necessary
+func EnsureSet(secrets *Secrets, name string) (b *BackupSet, err error) {
+	return nil, fmt.Errorf("Unimplemented")
+}

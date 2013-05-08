@@ -21,6 +21,7 @@ func TestDirectoryInfo(t *testing.T) {
 
 func TestFileInfo(t *testing.T) {
 	secrets, err := generateSecrets()
+	defer ZeroSecrets(secrets)
 	if err != nil {
 		t.Fatal(err)
 	}

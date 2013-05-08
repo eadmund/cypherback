@@ -23,7 +23,7 @@ Secrets
 -------
 
 A secrets file encapsulates a set of keys.  PBKDF2 is used to
-generated two keys: a 256-bit AES key encryption key and a 384-bit key
+generate two keys: a 256-bit AES key encryption key and a 384-bit key
 authentication key.  The number of PBKDF2 iterations is tuned to take
 approximately one second of wall clock time.  The keys are encrypted
 in CTR mode with a random IV; a 384-bit authentication tag is

@@ -18,10 +18,17 @@ import (
 
 type Secrets struct {
 	// AES-256 keys
-	chunkEncryption     []byte
-	chunkAuthentication []byte
-	// HMAC-SHA-384 key
-	chunkStorage []byte
+	metadataEncryption []byte
+	chunkEncryption    []byte
+	// HMAC-SHA-384 keys
+	metadataAuthentication []byte
+	chunkAuthentication    []byte
+	chunkStorage           []byte
+	// 64-bit nonce
+	metadataNonce []byte
+	// all the above are []byte rather than [32]byte, [48]byte or
+	// [8]byte in order to eliminate unnecessary copying, which
+	// could lead to unzeroed keys in RAM
 }
 
 func genKey(length int) (key []byte, err error) {
@@ -38,11 +45,19 @@ func genKey(length int) (key []byte, err error) {
 
 func generateSecrets() (secrets *Secrets, err error) {
 	secrets = &Secrets{}
+	secrets.metadataEncryption, err = genKey(32)
+	if err != nil {
+		return nil, err
+	}
 	secrets.chunkEncryption, err = genKey(32)
 	if err != nil {
 		return nil, err
 	}
-	secrets.chunkAuthentication, err = genKey(32)
+	secrets.metadataAuthentication, err = genKey(48)
+	if err != nil {
+		return nil, err
+	}
+	secrets.chunkAuthentication, err = genKey(48)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +65,11 @@ func generateSecrets() (secrets *Secrets, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return secrets, err
+	secrets.metadataNonce, err = genKey(8)
+	if err != nil {
+		return nil, err
+	}
+	return secrets, nil
 }
 
 func GenerateSecrets() (secrets *Secrets, err error) {
@@ -310,4 +329,48 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 		return nil, fmt.Errorf("Corrupted secrets file")
 	}
 	return secrets, nil
+}
+
+// ZeroSecrets zeros out all non-nil keys in SECRETS.
+func ZeroSecrets(secrets *Secrets) {
+	// don't need to zero out a nil secrets set
+	if secrets == nil {
+		return
+	}
+	if secrets.metadataEncryption != nil {
+		zeroKey(secrets.metadataEncryption, 32, "metadata encryption key")
+		secrets.metadataEncryption = nil
+	}
+	if secrets.chunkEncryption != nil {
+		zeroKey(secrets.chunkEncryption, 32, "chunk encryption key")
+		secrets.chunkEncryption = nil
+	}
+	if secrets.metadataAuthentication != nil {
+		zeroKey(secrets.metadataAuthentication, 48, "metadata authentication key")
+		secrets.metadataAuthentication = nil
+	}
+	if secrets.chunkAuthentication != nil {
+		zeroKey(secrets.chunkAuthentication, 48, "chunk authentication key")
+		secrets.chunkAuthentication = nil
+	}
+	if secrets.chunkStorage != nil {
+		zeroKey(secrets.chunkStorage, 48, "chunk storage")
+		secrets.chunkStorage = nil
+	}
+	if secrets.metadataNonce != nil {
+		zeroKey(secrets.metadataNonce, 8, "metadata nonce")
+		secrets.metadataNonce = nil
+	}
+	return
+}
+
+// zero out a byte array which should be LENGTH bytes long; if it's not
+// then panic with an error
+func zeroKey(key []byte, length int, description string) {
+	if len(key) != length {
+		panic(fmt.Errorf("SERIOUS ERROR: %s is %d bytes, not %d bytes.  Destroy all items encrypted under this scheme.", description, len(key), length))
+	}
+	for i := 0; i < length; i++ {
+		key[i] = 0
+	}
 }
