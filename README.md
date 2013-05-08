@@ -40,13 +40,11 @@ their associated metadata.  The backup set format is inspired by tar,
 but with some modifications for this unique use case.  Each backup set
 is a sequence of backup runs.
 
-Each backup run is represented by a sequence of records, starting with
-a start record indicating the public and secret run nonces (two
-independent 32-bit values unique across all runs within this set),
-date and the length in bytes of the following records, and ending with
-the last record.  File contents are not stored in the backup run or
-backup set; rather, each regular file record contains references to
-its contents.
+Each backup run is represented by a sequence of records, starting with a
+start record indicating the date and the length in bytes of the
+following records, and ending with the last record.  File contents are
+not stored in the backup run or backup set; rather, each regular file
+record contains references to its contents.
 
 To run a backup, first the current backup set is downloaded, then all
 files which have changed since the previous backup are added to the
@@ -72,19 +70,13 @@ Files
 -----
 
 A file's contents are broken up into 256K chunks (in a future version,
-variable-length chunks are a possibility).  Each chunk is encrypted
-with AES in CTR mode under the chunk encryption key with a unique IV
-as indicated below.  The chunk storage format consists of one
-plaintext byte of version (currently 0), then the 32-bit public run
-nonce, then a 32-bit chunk nonce, then the encrypted chunk data, then
-a 48-byte authentication tag, given by HMAC-SHA-384(chunk
-authentication key,
-[version, public run nonce, secret run nonce, chunk nonce, length(encrypted data), encrypted data]).
-
-The IV is calculated by appending the 32-bit secret run nonce, the 32-bit
-chunk nonce and then 64 zero bits.  The chunk nonce is a random 32-bit
-value unique within a run (keep a Bloom filter or hash table to track
-used nonces within a run).
+variable-length chunks are a possibility).  Each chunk is encrypted with
+AES in CTR mode under a unique chunk encryption key & IV as indicated
+below.  The chunk storage format consists of one plaintext byte of
+version (currently 0), then a 48-byte chunk nonce, then the encrypted
+chunk data, then a 48-byte authentication tag, given by
+HMAC-SHA-384(chunk authentication key, [version, chunk nonce,
+length(encrypted data), encrypted data]).
 
 The encrypted data within a chunk consist of one byte indicating
 compression, followed by the chunk data (either compressed or
@@ -93,10 +85,10 @@ uncompressed).
 Each chunk is stored under the name HMAC-SHA-384(chunk storage key,
 chunk plaintext).
 
-The chunk encryption key and IV are generated under the NIST SP
-800-108 KDF in Counter Mode protocol: HMAC-SHA-384(chunk master key,
-[0x00, "chunk encryption", 0x00, chunk storage name, 0x180]); the
-first 256 bits are the key and the following 128 bits are the IV.
+The chunk encryption key and IV are generated under the NIST SP 800-108
+KDF in Counter Mode protocol: HMAC-SHA-384(chunk master key, [0x00,
+"chunk encryption", 0x00, chunk nonce, 0x180]); the first 256 bits are
+the key and the following 128 bits are the IV.
 
 Use of Galois/Counter Mode
 ==========================
