@@ -14,17 +14,23 @@ primitives are implemented in the Go language libraries.
 Keys
 ----
 
-There are four keys in use: a 256-bit metadata encryption key; a
-256-bit chunk encryption key; a 384-bit chunk authentication key; and
-a 384-bit chunk storage key.
+There are five keys in use: a 256-bit metadata encryption key; a
+256-bit metadata authentication key; a 256-bit chunk encryption key; a
+384-bit chunk authentication key; and a 384-bit chunk storage key.
+There is also a 64-bit metadata nonce.
 
 Secrets
 -------
 
-A secrets file encapsulates a set of keys.  It is encrypted under a
-key encryption key derived from the user's passphrase using PBKDF2
-under a numbe of iterations intended to last approximately 1 second.
-FIXME: follow the NIST key wrap specification, or RFC 5297.
+A secrets file encapsulates a set of keys.  PBKDF2 is used to
+generated two keys: a 256-bit AES key encryption key and a 384-bit key
+authentication key.  The number of PBKDF2 iterations is tuned to take
+approximately one second of wall clock time.  The keys are encrypted
+in CTR mode with a random IV; a 384-bit authentication tag is
+appended.
+
+This follows NIST SP 800-38F, which specifies that keys may be stored
+under an approved encryption mode and an approved authentication mode.
 
 Backup sets
 -----------
@@ -35,34 +41,68 @@ but with some modifications for this unique use case.  Each backup set
 is a sequence of backup runs.
 
 Each backup run is represented by a sequence of records, starting with
-a start record indicating the date, and ending with an end record.  In
-between are file records which record metadata about the files
-themselves.  File contents are not stored in the backup run or backup
-set; rather, each regular file record contains references to its
-contents.
+a start record indicating the public and secret run nonces (two
+independent 32-bit values unique across all runs within this set),
+date and the length in bytes of the following records, and ending with
+the last record.  File contents are not stored in the backup run or
+backup set; rather, each regular file record contains references to
+its contents.
 
 To run a backup, first the current backup set is downloaded, then all
 files which have changed since the previous backup are added to the
 backup set (FIXME: add a hash of each file's data to its record to
 help this?; FIXME: add deletion records), then their chunks are
 uploaded in random order, and finally the new backup set is uploaded.
-A property of the stream-oriented format is that the new records need
-merely be appended to the old.
+
+The entire backup set is encrypted with AES in CTR mode under the
+metadata encryption key; the IV is the metadata nonce concatenated
+with 64 zero bits.  This means that is possible to determine the IV to
+use for any block within the backup set stream simply by incrementing
+the IV appropriately.
+
+The final 48 bytes of the backup set consist of HMAC-SHA-384(metadata
+authentication key, encrypted backup set).  These bytes are not
+encrypted.
+
+A property of the stream-oriented format is that a new backup run may
+be appended by overwriting the authentication tag (and further bytes)
+with the new data, then appending a new authentication tag.
 
 Files
 -----
 
 A file's contents are broken up into 256K chunks (in a future version,
 variable-length chunks are a possibility).  Each chunk is encrypted
-under the chunk encryption key with a random IV.  The chunk storage
-format consists of one byte of version (currently 0); then a byte
-representing a Boolean true or false, indicating whether or not the
-chunk was compressed before encryption; then 256 bits (16 bytes) of
-initialisation vector; then 4 bytes (FIXME: determine endianness)
-indicating the length of the chunk; then LENGTH bytes of encrypted
-data, and finally a 384-bit (48 bytes) authenticator, generated with
-HMAC-SHA-384(chunk authentication key,
-[version, compressed-p, IV, length, encrypted data]).
+with AES in CTR mode under the chunk encryption key with a unique IV
+as indicated below.  The chunk storage format consists of one
+plaintext byte of version (currently 0), then the 32-bit public run
+nonce, then a 32-bit chunk nonce, then the encrypted chunk data, then
+a 48-byte authentication tag, given by HMAC-SHA-384(chunk
+authentication key,
+[version, public run nonce, secret run nonce, chunk nonce, length(encrypted data), encrypted data]).
+
+The IV is calculated by appending the 32-bit secret run nonce, the 32-bit
+chunk nonce and then 64 zero bits.  The chunk nonce is a random 32-bit
+value unique within a run (keep a Bloom filter or hash table to track
+used nonces within a run).
+
+The encrypted data within a chunk consist of one byte indicating
+compression, followed by the chunk data (either compressed or
+uncompressed).
+
+Each chunk is stored under the name HMAC-SHA-384(chunk storage key,
+chunk plaintext).
+
+The chunk encryption key is generated under the NIST SP 800-108 KDF in
+Counter Mode protocol: HMAC-SHA-384(chunk master key,
+[0x00, "chunk encryption", 0x00, chunk storage name, 0x180]).
+
+Use of Galois/Counter Mode
+==========================
+
+A future version of this protocol should convert all uses of CTR to
+GCM.  In each case, a 128-bit authentication tag will be prepended to
+the 384-bit HMAC.
 
 Inspiration
 ===========
