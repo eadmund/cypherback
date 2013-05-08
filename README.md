@@ -15,7 +15,7 @@ Keys
 ----
 
 There are five keys in use: a 256-bit metadata encryption key; a
-256-bit metadata authentication key; a 256-bit chunk encryption key; a
+256-bit metadata authentication key; a 384-bit chunk master key; a
 384-bit chunk authentication key; and a 384-bit chunk storage key.
 There is also a 64-bit metadata nonce.
 
@@ -93,9 +93,10 @@ uncompressed).
 Each chunk is stored under the name HMAC-SHA-384(chunk storage key,
 chunk plaintext).
 
-The chunk encryption key is generated under the NIST SP 800-108 KDF in
-Counter Mode protocol: HMAC-SHA-384(chunk master key,
-[0x00, "chunk encryption", 0x00, chunk storage name, 0x180]).
+The chunk encryption key and IV are generated under the NIST SP
+800-108 KDF in Counter Mode protocol: HMAC-SHA-384(chunk master key,
+[0x00, "chunk encryption", 0x00, chunk storage name, 0x180]); the
+first 256 bits are the key and the following 128 bits are the IV.
 
 Use of Galois/Counter Mode
 ==========================
