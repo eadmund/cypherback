@@ -2,6 +2,7 @@ package main
 
 import (
 	"cypherback"
+	fileBackend "cypherback/backends/file"
 	"fmt"
 	"log"
 	"os"
@@ -37,6 +38,12 @@ func main() {
 		usage()
 		return
 	}
+	configDir, err := cypherback.EnsureConfigDir()
+	if err != nil {
+		logError("Couldn't ensure configuration directory exists: %s", err)
+		return
+	}
+	backend := fileBackend.NewFileBackend(configDir)
 	switch os.Args[1] {
 	case "secrets":
 		if len(os.Args) < 3 {
@@ -44,7 +51,7 @@ func main() {
 			return
 		}
 		if os.Args[2] == "generate" {
-			secrets, err := cypherback.GenerateSecrets()
+			secrets, err := cypherback.GenerateSecrets(backend)
 			defer cypherback.ZeroSecrets(secrets)
 			if err != nil {
 				logError("Error: %v", err)
@@ -63,7 +70,7 @@ func main() {
 		var paths []string
 		paths = append(paths, os.Args[3:]...)
 
-		secrets, err := cypherback.ReadSecrets()		
+		secrets, err := cypherback.ReadSecrets()
 		defer cypherback.ZeroSecrets(secrets)
 		if err != nil {
 			logError("Error: %v", err)
@@ -71,7 +78,7 @@ func main() {
 		}
 
 		_, err = cypherback.EnsureSet(secrets, setName)
-		
+
 		if err != nil {
 			logError("Error: %v", err)
 			return
@@ -79,7 +86,7 @@ func main() {
 
 		for _, path := range paths {
 			cypherback.ProcessPath(path, secrets)
-		}	
+		}
 	default:
 		logError("Unknown command %s", os.Args[1])
 		return

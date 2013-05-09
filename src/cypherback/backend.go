@@ -1,6 +1,6 @@
 package cypherback
 
-type Backend interface  {
-	WriteSecrets(secrets *Secrets, encryptionKey, authenticationKey []byte) error
-	ReadSecrets(encryptionKey, authenticationKey []byte) (*Secrets, error)
+type Backend interface {
+	WriteSecrets(encSecrets []byte) error
+	ReadSecrets() ([]byte, error)
 }

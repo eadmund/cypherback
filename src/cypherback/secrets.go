@@ -11,15 +11,13 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"os"
-	"path/filepath"
 	//"time"
 )
 
 type Secrets struct {
 	// AES-256 keys
 	metadataEncryption []byte
-	chunkMaster    []byte
+	chunkMaster        []byte
 	// HMAC-SHA-384 keys
 	metadataAuthentication []byte
 	chunkAuthentication    []byte
@@ -72,17 +70,12 @@ func generateSecrets() (secrets *Secrets, err error) {
 	return secrets, nil
 }
 
-func GenerateSecrets() (secrets *Secrets, err error) {
+func GenerateSecrets(backend Backend) (secrets *Secrets, err error) {
 	secrets, err = generateSecrets()
 	if err != nil {
 		return nil, err
 	}
-	configDir, err := ensureConfigDir()
-	if err != nil {
-		return nil, err
-	}
-	secretsPath := filepath.Join(configDir, "secrets")
-	err = writeSecrets(secrets, secretsPath)
+	err = writeSecrets(secrets, backend)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +84,7 @@ func GenerateSecrets() (secrets *Secrets, err error) {
 	return secrets, nil
 }
 
-func writeSecrets(secrets *Secrets, path string) (err error) {
+func writeSecrets(secrets *Secrets, backend Backend) (err error) {
 	/*
 		To write a secrets file:
 
@@ -125,13 +118,7 @@ func writeSecrets(secrets *Secrets, path string) (err error) {
 	secretsEncKey := secretsKeys[:32]
 	secretsAuthKey := secretsKeys[32:]
 	authHMAC := hmac.New(sha512.New384, secretsAuthKey)
-	// FIXME: write temporary file first
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
+	file := bytes.NewBuffer(nil)
 	writer := io.MultiWriter(file, authHMAC)
 	version := []byte{0}
 	n, err = writer.Write(version)
@@ -206,27 +193,14 @@ func writeSecrets(secrets *Secrets, path string) (err error) {
 	if n != len(authSum) {
 		return fmt.Errorf("Error writing secrets file")
 	}
-
-	return nil
+	return backend.WriteSecrets(file.Bytes())
 }
 
-func ReadSecrets() (secrets *Secrets, err error) {
-	configDir, err := ensureConfigDir()
-	if err != nil {
-		return nil, err
-	}
-	secretsPath := filepath.Join(configDir, "secrets")
-	return readSecrets(secretsPath)
-}
-
-func readSecrets(path string) (secrets *Secrets, err error) {
+func ReadSecrets(backend Backend) (secrets *Secrets, err error) {
 	passphrase := termios.Password("Enter passphrase: ")
 
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+	encSecrets, err := backend.ReadSecrets()
+	file := bytes.NewBuffer(encSecrets)
 	version := make([]byte, 1)
 	n, err := file.Read(version)
 	if err != nil {

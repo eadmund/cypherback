@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-func ensureConfigDir() (path string, err error) {
+func EnsureConfigDir() (path string, err error) {
 	usr, err := user.Current()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
