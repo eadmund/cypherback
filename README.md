@@ -32,6 +32,11 @@ appended.
 This follows NIST SP 800-38F, which specifies that keys may be stored
 under an approved encryption mode and an approved authentication mode.
 
+A secrets file is uniquely identified by SHA-384(["cypherback", version,
+metadata encryption key, metadata authentication key, metadata nonce,
+chunk master key, chunk authentication key, chunk storage key]), where
+version equals a zero byte for this documented version.
+
 Backup sets
 -----------
 

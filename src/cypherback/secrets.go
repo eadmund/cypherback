@@ -19,7 +19,7 @@ import (
 type Secrets struct {
 	// AES-256 keys
 	metadataEncryption []byte
-	chunkEncryption    []byte
+	chunkMaster    []byte
 	// HMAC-SHA-384 keys
 	metadataAuthentication []byte
 	chunkAuthentication    []byte
@@ -49,7 +49,7 @@ func generateSecrets() (secrets *Secrets, err error) {
 	if err != nil {
 		return nil, err
 	}
-	secrets.chunkEncryption, err = genKey(32)
+	secrets.chunkMaster, err = genKey(32)
 	if err != nil {
 		return nil, err
 	}
@@ -165,9 +165,9 @@ func writeSecrets(secrets *Secrets, path string) (err error) {
 	if err != nil {
 		return err
 	}
-	keyBuf := make([]byte, len(secrets.chunkEncryption))
-	cypher.Encrypt(keyBuf, secrets.chunkEncryption)
-	cypher.Encrypt(keyBuf[16:], secrets.chunkEncryption[16:])
+	keyBuf := make([]byte, len(secrets.chunkMaster))
+	cypher.Encrypt(keyBuf, secrets.chunkMaster)
+	cypher.Encrypt(keyBuf[16:], secrets.chunkMaster[16:])
 	n, err = writer.Write(keyBuf)
 	if err != nil {
 		return err
@@ -278,11 +278,11 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	}
 
 	secrets = &Secrets{}
-	secrets.chunkEncryption = make([]byte, 32)
+	secrets.chunkMaster = make([]byte, 32)
 	secrets.chunkAuthentication = make([]byte, 32)
 	secrets.chunkStorage = make([]byte, 48)
 
-	keyBuf := make([]byte, len(secrets.chunkEncryption))
+	keyBuf := make([]byte, len(secrets.chunkMaster))
 	n, err = reader.Read(keyBuf)
 	if err != nil {
 		return nil, err
@@ -290,8 +290,8 @@ func readSecrets(path string) (secrets *Secrets, err error) {
 	if n != len(keyBuf) {
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
-	cypher.Decrypt(secrets.chunkEncryption, keyBuf)
-	cypher.Decrypt(secrets.chunkEncryption[16:], keyBuf[16:])
+	cypher.Decrypt(secrets.chunkMaster, keyBuf)
+	cypher.Decrypt(secrets.chunkMaster[16:], keyBuf[16:])
 
 	keyBuf = make([]byte, len(secrets.chunkAuthentication))
 	n, err = reader.Read(keyBuf)
@@ -341,9 +341,9 @@ func ZeroSecrets(secrets *Secrets) {
 		zeroKey(secrets.metadataEncryption, 32, "metadata encryption key")
 		secrets.metadataEncryption = nil
 	}
-	if secrets.chunkEncryption != nil {
-		zeroKey(secrets.chunkEncryption, 32, "chunk encryption key")
-		secrets.chunkEncryption = nil
+	if secrets.chunkMaster != nil {
+		zeroKey(secrets.chunkMaster, 32, "chunk encryption key")
+		secrets.chunkMaster = nil
 	}
 	if secrets.metadataAuthentication != nil {
 		zeroKey(secrets.metadataAuthentication, 48, "metadata authentication key")
@@ -376,4 +376,17 @@ func zeroKey(key []byte, length int, description string) {
 	for i := 0; i < length; i++ {
 		key[i] = 0
 	}
+}
+
+func SecretsId(secrets *Secrets) []byte {
+	digester := sha512.New384()
+	// no errors are possible from hash.Write, per the docs
+	digester.Write([]byte("cypherback\x00"))
+	digester.Write(secrets.metadataEncryption)
+	digester.Write(secrets.metadataAuthentication)
+	digester.Write(secrets.metadataNonce)
+	digester.Write(secrets.chunkMaster)
+	digester.Write(secrets.chunkAuthentication)
+	digester.Write(secrets.chunkStorage)
+	return digester.Sum(nil)
 }

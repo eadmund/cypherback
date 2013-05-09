@@ -113,7 +113,7 @@ func (ew encWriter) Close() error {
 }
 
 func newEncWriter(w io.Writer, secrets *Secrets) (*encWriter, error) {
-	aesCypher, err := aes.NewCipher(secrets.chunkEncryption)
+	aesCypher, err := aes.NewCipher(secrets.chunkMaster)
 	if err != nil {
 		return nil, err
 	}
