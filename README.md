@@ -37,6 +37,24 @@ metadata encryption key, metadata authentication key, metadata nonce,
 chunk master key, chunk authentication key, chunk storage key]), where
 version equals a zero byte for this documented version.
 
+The current secrets file format is:
+
+		Byte Length
+		  0    1    File version (0 for this version)
+		  1   32    Salt
+		 33    8    Number of PBKDF2 iterations
+         41   48    SHA-384([KEK, KAK])
+         99   16    IV
+        --------    begin AES-256-CTR
+        115   32      metadata encryption key
+        147   48      metadata authentication key
+        195    8      metadata nonce
+        203   32      chunk master key
+        235   48      chunk authentication key
+        283   48      chunk storage key
+        --------    end AES-256-CTR
+		331   48    HMAC-SHA-384(authentication key, bytes 0-330)
+
 Backup sets
 -----------
 

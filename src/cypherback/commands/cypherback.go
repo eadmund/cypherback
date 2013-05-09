@@ -70,7 +70,7 @@ func main() {
 		var paths []string
 		paths = append(paths, os.Args[3:]...)
 
-		secrets, err := cypherback.ReadSecrets()
+		secrets, err := cypherback.ReadSecrets(backend)
 		defer cypherback.ZeroSecrets(secrets)
 		if err != nil {
 			logError("Error: %v", err)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"code.google.com/p/go.crypto/pbkdf2"
 	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha512"
@@ -79,7 +80,6 @@ func GenerateSecrets(backend Backend) (secrets *Secrets, err error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(secrets)
 
 	return secrets, nil
 }
@@ -88,19 +88,11 @@ func writeSecrets(secrets *Secrets, backend Backend) (err error) {
 	/*
 		To write a secrets file:
 
-		PBKDF2 the user's password with a random 32-byte salt under SHA-384;
-		use this to generate 80 bytes of keying material.  The first 32 bytes
-		form an AES-256 encryption key; the next 48 bytes form an HMAC-SHA-384
+		PBKDF2 the user's password with a random 32-byte salt
+		under SHA-384; use this to generate 80 bytes of keying
+		material.  The first 32 bytes form an AES-256
+		encryption key; the next 48 bytes form an HMAC-SHA-384
 		authentication key.
-
-		Byte Length
-		 00    1    File version (0 for this version)
-		 01   32    Salt
-		 33    8    Number of PBKDF2 iterations
-		 41   32    AES-256-ECB(encryption key, chunk encryption key)
-		 73   32    AES-256-ECB(encryption key, chunk authentication key)
-		105   48    AES-256-ECB(encryption key, chunk storage key)
-		153   48    HMAC-SHA-384(authentication key, bytes 00-152)
 
 	*/
 
@@ -117,6 +109,9 @@ func writeSecrets(secrets *Secrets, backend Backend) (err error) {
 	secretsKeys := pbkdf2.Key([]byte(passphrase), salt, iterations, 80, sha512.New384)
 	secretsEncKey := secretsKeys[:32]
 	secretsAuthKey := secretsKeys[32:]
+	secretsKeysDigest := sha512.New384()
+	secretsKeysDigest.Write(secretsKeys)
+	secretsKeysHash := secretsKeysDigest.Sum(nil)
 	authHMAC := hmac.New(sha512.New384, secretsAuthKey)
 	file := bytes.NewBuffer(nil)
 	writer := io.MultiWriter(file, authHMAC)
@@ -148,43 +143,82 @@ func writeSecrets(secrets *Secrets, backend Backend) (err error) {
 		return fmt.Errorf("Error writing secrets file")
 	}
 
+	n, err = writer.Write(secretsKeysHash)
+	if err != nil {
+		return err
+	}
+	if n != len(secretsKeysHash) {
+		return fmt.Errorf("Error writing secrets file")
+	}
+
+	iv, err := genKey(16)
+	if err != nil {
+		return err
+	}
+	n, err = writer.Write(iv)
+	if err != nil {
+		return err
+	}
+	if n != len(iv) {
+		return fmt.Errorf("Error writing secrets file")
+	}
+
 	cypher, err := aes.NewCipher(secretsEncKey)
 	if err != nil {
 		return err
 	}
-	keyBuf := make([]byte, len(secrets.chunkMaster))
-	cypher.Encrypt(keyBuf, secrets.chunkMaster)
-	cypher.Encrypt(keyBuf[16:], secrets.chunkMaster[16:])
-	n, err = writer.Write(keyBuf)
+
+	ctrWriter := cipher.StreamWriter{S: cipher.NewCTR(cypher, iv),
+		W: writer}
+
+	n, err = ctrWriter.Write(secrets.metadataEncryption)
 	if err != nil {
 		return err
 	}
-	if n != len(keyBuf) {
+	if n != len(secrets.metadataEncryption) {
 		return fmt.Errorf("Error writing secrets file")
 	}
 
-	keyBuf = make([]byte, len(secrets.chunkAuthentication))
-	cypher.Encrypt(keyBuf, secrets.chunkAuthentication)
-	cypher.Encrypt(keyBuf[16:], secrets.chunkAuthentication[16:])
-	n, err = writer.Write(keyBuf)
+	n, err = ctrWriter.Write(secrets.metadataAuthentication)
 	if err != nil {
 		return err
 	}
-	if n != len(keyBuf) {
+	if n != len(secrets.metadataAuthentication) {
 		return fmt.Errorf("Error writing secrets file")
 	}
 
-	keyBuf = make([]byte, len(secrets.chunkStorage))
-	cypher.Encrypt(keyBuf, secrets.chunkStorage)
-	cypher.Encrypt(keyBuf[16:], secrets.chunkStorage[16:])
-	cypher.Encrypt(keyBuf[32:], secrets.chunkStorage[32:])
-	n, err = writer.Write(keyBuf)
+	n, err = ctrWriter.Write(secrets.metadataNonce)
 	if err != nil {
 		return err
 	}
-	if n != len(keyBuf) {
+	if n != len(secrets.metadataNonce) {
 		return fmt.Errorf("Error writing secrets file")
 	}
+
+	n, err = ctrWriter.Write(secrets.chunkMaster)
+	if err != nil {
+		return err
+	}
+	if n != len(secrets.chunkMaster) {
+		return fmt.Errorf("Error writing secrets file")
+	}
+
+	n, err = ctrWriter.Write(secrets.chunkAuthentication)
+	if err != nil {
+		return err
+	}
+	if n != len(secrets.chunkAuthentication) {
+		return fmt.Errorf("Error writing secrets file")
+	}
+
+	n, err = ctrWriter.Write(secrets.chunkStorage)
+	if err != nil {
+		return err
+	}
+	if n != len(secrets.chunkStorage) {
+		return fmt.Errorf("Error writing secrets file")
+	}
+
 	authSum := authHMAC.Sum(nil)
 	n, err = writer.Write(authSum)
 	if err != nil {
@@ -238,57 +272,109 @@ func ReadSecrets(backend Backend) (secrets *Secrets, err error) {
 	// if the time to generate a key is too far from the target of 1
 	// second
 	secretsKeys := pbkdf2.Key([]byte(passphrase), salt, iterations, 80, sha512.New384)
+	secretsDigest := sha512.New384()
+	// don't need to check for errors, per spec
+	secretsDigest.Write(secretsKeys)
+	secretsKeysHash := secretsDigest.Sum(nil)
+	storedHash := make([]byte, len(secretsKeysHash))
+	n, err = file.Read(storedHash)
+	if err != nil {
+		return nil, err
+	}
+	if n != len(storedHash) {
+		return nil, fmt.Errorf("Error reading secrets file")
+	}
+	if !bytes.Equal(storedHash, secretsKeysHash) {
+		return nil, fmt.Errorf("Bad password")
+	}
+
+	iv := make([]byte, 16)
+	n, err = file.Read(iv)
+	if err != nil {
+		return nil, err
+	}
+	if n != len(iv) {
+		return nil, fmt.Errorf("Error reading secrets file")
+	}
+
 	secretsEncKey := secretsKeys[:32]
 	secretsAuthKey := secretsKeys[32:]
 	authHMAC := hmac.New(sha512.New384, secretsAuthKey)
-	authHMAC.Write([]byte{0})
+	authHMAC.Write(version)
 	authHMAC.Write(salt)
 	authHMAC.Write(iterBytes)
+	authHMAC.Write(secretsKeysHash)
+	authHMAC.Write(iv)
 
 	reader := io.TeeReader(file, authHMAC)
 	cypher, err := aes.NewCipher(secretsEncKey)
 	if err != nil {
 		return nil, err
 	}
+	ctrReader := cipher.StreamReader{S: cipher.NewCTR(cypher, iv),
+		R: reader}
 
 	secrets = &Secrets{}
+	secrets.metadataEncryption = make([]byte, 32)
+	n, err = ctrReader.Read(secrets.metadataEncryption)
+	if err != nil {
+		ZeroSecrets(secrets)
+		return nil, err
+	}
+	if n != len(secrets.metadataEncryption) {
+		ZeroSecrets(secrets)
+		return nil, fmt.Errorf("Error reading secrets file")
+	}
+	secrets.metadataAuthentication = make([]byte, 48)
+	n, err = ctrReader.Read(secrets.metadataAuthentication)
+	if err != nil {
+		ZeroSecrets(secrets)
+		return nil, err
+	}
+	if n != len(secrets.metadataAuthentication) {
+		ZeroSecrets(secrets)
+		return nil, fmt.Errorf("Error reading secrets file")
+	}
+	secrets.metadataNonce = make([]byte, 8)
+	n, err = ctrReader.Read(secrets.metadataNonce)
+	if err != nil {
+		ZeroSecrets(secrets)
+		return nil, err
+	}
+	if n != len(secrets.metadataNonce) {
+		ZeroSecrets(secrets)
+		return nil, fmt.Errorf("Error reading secrets file")
+	}
 	secrets.chunkMaster = make([]byte, 32)
-	secrets.chunkAuthentication = make([]byte, 32)
+	n, err = ctrReader.Read(secrets.chunkMaster)
+	if err != nil {
+		ZeroSecrets(secrets)
+		return nil, err
+	}
+	if n != len(secrets.chunkMaster) {
+		ZeroSecrets(secrets)
+		return nil, fmt.Errorf("Error reading secrets file")
+	}
+	secrets.chunkAuthentication = make([]byte, 48)
+	n, err = ctrReader.Read(secrets.chunkAuthentication)
+	if err != nil {
+		ZeroSecrets(secrets)
+		return nil, err
+	}
+	if n != len(secrets.chunkAuthentication) {
+		ZeroSecrets(secrets)
+		return nil, fmt.Errorf("Error reading secrets file")
+	}
 	secrets.chunkStorage = make([]byte, 48)
-
-	keyBuf := make([]byte, len(secrets.chunkMaster))
-	n, err = reader.Read(keyBuf)
+	n, err = ctrReader.Read(secrets.chunkStorage)
 	if err != nil {
+		ZeroSecrets(secrets)
 		return nil, err
 	}
-	if n != len(keyBuf) {
+	if n != len(secrets.chunkStorage) {
+		ZeroSecrets(secrets)
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
-	cypher.Decrypt(secrets.chunkMaster, keyBuf)
-	cypher.Decrypt(secrets.chunkMaster[16:], keyBuf[16:])
-
-	keyBuf = make([]byte, len(secrets.chunkAuthentication))
-	n, err = reader.Read(keyBuf)
-	if err != nil {
-		return nil, err
-	}
-	if n != len(keyBuf) {
-		return nil, fmt.Errorf("Error reading secrets file")
-	}
-	cypher.Decrypt(secrets.chunkAuthentication, keyBuf)
-	cypher.Decrypt(secrets.chunkAuthentication[16:], keyBuf[16:])
-
-	keyBuf = make([]byte, len(secrets.chunkStorage))
-	n, err = reader.Read(keyBuf)
-	if err != nil {
-		return nil, err
-	}
-	if n != len(keyBuf) {
-		return nil, fmt.Errorf("Error reading secrets file")
-	}
-	cypher.Decrypt(secrets.chunkStorage, keyBuf)
-	cypher.Decrypt(secrets.chunkStorage[16:], keyBuf[16:])
-	cypher.Decrypt(secrets.chunkStorage[32:], keyBuf[32:])
 
 	calcSum := authHMAC.Sum(nil)
 	authSum := make([]byte, authHMAC.Size())

@@ -1,17 +1,17 @@
 package file
 
 import (
-	"crypto/hmac"
-	"crypto/sha512"
-	"filepath"
+	"fmt"
 	"io/ioutil"
+	"os"
+	"path/filepath"
 )
 
 type FileBackend struct {
 	path string
 }
 
-func (fb *FileBackend) WriteSecrets(encSecrets []bytes) (err error) {
+func (fb *FileBackend) WriteSecrets(encSecrets []byte) (err error) {
 	path := filepath.Join(fb.path, "secrets")
 	file, err := os.Create(path)
 	if err != nil {
