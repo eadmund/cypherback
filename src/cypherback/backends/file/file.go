@@ -28,8 +28,13 @@ type FileBackend struct {
 	path string
 }
 
-func (fb *FileBackend) WriteSecrets(encSecrets []byte) (err error) {
-	path := filepath.Join(fb.path, "secrets")
+func (fb *FileBackend) WriteSecrets(id string, encSecrets []byte) (err error) {
+	path := filepath.Join(fb.path, id)
+	err = os.MkdirAll(path, os.ModePerm)
+	if err != nil {
+		return nil
+	}
+	path = filepath.Join(path, "secrets")
 	file, err := os.Create(path)
 	if err != nil {
 		return err
@@ -44,11 +49,21 @@ func (fb *FileBackend) WriteSecrets(encSecrets []byte) (err error) {
 	if n != len(encSecrets) {
 		return fmt.Errorf("Did not write all %d bytes, but only %d", len(encSecrets), n)
 	}
+	// if there isn't a default secrets file, create a symlink to this one
+	defaultPath := filepath.Join(fb.path, "defaultSecrets")
+	_, err = os.Stat(defaultPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			err = os.Symlink(path, defaultPath)
+		} else {
+			return err
+		}
+	}
 	return nil
 }
 
 func (fb *FileBackend) ReadSecrets() (encSecrets []byte, err error) {
-	path := filepath.Join(fb.path, "secrets")
+	path := filepath.Join(fb.path, "defaultSecrets")
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err

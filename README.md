@@ -39,10 +39,10 @@ version equals a zero byte for this documented version.
 
 The current secrets file format is:
 
-		Byte Length
-		  0    1    File version (0 for this version)
-		  1   32    Salt
-		 33    8    Number of PBKDF2 iterations
+        Byte Length
+          0    1    File version (0 for this version)
+          1   32    Salt
+         33    8    Number of PBKDF2 iterations
          41   48    SHA-384([KEK, KAK])
          99   16    IV
         --------    begin AES-256-CTR
@@ -53,15 +53,22 @@ The current secrets file format is:
         235   48      chunk authentication key
         283   48      chunk storage key
         --------    end AES-256-CTR
-		331   48    HMAC-SHA-384(authentication key, bytes 0-330)
+        331   48    HMAC-SHA-384(authentication key, bytes 0-330)
+
+A single invoker of cypherback may control multiple secrets files, but
+only one secrets file is in use at any one time; that is, no backup set
+or chunk is ever common to two or more secrets files.
+
+It's probable that many backends will store the secrets file under its
+own private path.
 
 Backup sets
 -----------
 
 Each logical backup forms a 'backup set,' which is a set of files and
 their associated metadata.  The backup set format is inspired by tar,
-but with some modifications for this unique use case.  Each backup set
-is a sequence of backup runs.
+but with some modifications for this use case, where data is stored
+separately from metadata.  Each backup set is a sequence of backup runs.
 
 Each backup run is represented by a sequence of records, starting with a
 start record indicating the date and the length in bytes of the

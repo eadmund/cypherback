@@ -23,6 +23,7 @@ import (
 	"code.google.com/p/go.crypto/pbkdf2"
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/hex"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha512"
@@ -244,7 +245,7 @@ func writeSecrets(secrets *Secrets, backend Backend) (err error) {
 	if n != len(authSum) {
 		return fmt.Errorf("Error writing secrets file")
 	}
-	return backend.WriteSecrets(file.Bytes())
+	return backend.WriteSecrets(hex.EncodeToString(secrets.Id()), file.Bytes())
 }
 
 func ReadSecrets(backend Backend) (secrets *Secrets, err error) {
@@ -455,7 +456,7 @@ func zeroKey(key []byte, length int, description string) {
 	}
 }
 
-func SecretsId(secrets *Secrets) []byte {
+func (secrets *Secrets) Id() []byte {
 	digester := sha512.New384()
 	// no errors are possible from hash.Write, per the docs
 	digester.Write([]byte("cypherback\x00"))
