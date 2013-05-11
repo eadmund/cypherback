@@ -76,11 +76,11 @@ following records, and ending with the last record.  File contents are
 not stored in the backup run or backup set; rather, each regular file
 record contains references to its contents.
 
-To run a backup, first the current backup set is downloaded, then all
-files which have changed since the previous backup are added to the
-backup set (FIXME: add a hash of each file's data to its record to
-help this?; FIXME: add deletion records), then their chunks are
-uploaded in random order, and finally the new backup set is uploaded.
+To run a backup, first the current backup set, if any, is downloaded,
+then all files which have changed since the previous backup are added to
+the backup set (FIXME: add a hash of each file's data to its record to
+help this?; FIXME: add deletion records), then their chunks are uploaded
+in random order, and finally the new backup set is uploaded.
 
 The entire backup set is encrypted with AES in CTR mode under the
 metadata encryption key; the IV is the metadata nonce concatenated
@@ -95,6 +95,14 @@ encrypted.
 A property of the stream-oriented format is that a new backup run may
 be appended by overwriting the authentication tag (and further bytes)
 with the new data, then appending a new authentication tag.
+
+The start-backup-run record has the following format:
+
+  Byte Length
+    0     1    Version (currently 0)
+    1     1    Type (0 for start-backup-record)
+    2     8    Unix time in seconds when this record was written
+    10    4    Length in bytes of following records
 
 Files
 -----
@@ -123,9 +131,10 @@ the key and the following 128 bits are the IV.
 Use of Galois/Counter Mode
 ==========================
 
-A future version of this protocol should convert all uses of CTR to
-GCM.  In each case, a 128-bit authentication tag will be prepended to
-the 384-bit HMAC.
+A future version of this protocol should convert all uses of CTR to GCM.
+In each case, a 128-bit authentication tag will be written before the
+384-bit HMAC; the HMAC will include the authentication tag in its
+authenticated data.
 
 Inspiration
 ===========
