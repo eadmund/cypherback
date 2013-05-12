@@ -1,5 +1,4 @@
-cypherback
-==========
+# cypherback
 
 Cypherback is a backup system designed to be secure from the ground
 up.  No private data is ever uploaded to a remote server.  The
@@ -11,16 +10,14 @@ It supports deduplication in order to reduce storage costs.
 Cypherback itself contains no cryptographic code; all cryptographic
 primitives are implemented in the Go language libraries.
 
-Keys
-----
+## Keys
 
 There are five keys in use: a 256-bit metadata encryption key; a
 384-bit metadata authentication key; a 384-bit chunk master key; a
 384-bit chunk authentication key; and a 384-bit chunk storage key.
 There is also a 64-bit metadata nonce.
 
-Secrets
--------
+## Secrets
 
 A secrets file encapsulates a set of keys.  PBKDF2 is used to
 generate two keys: a 256-bit AES key encryption key and a 384-bit key
@@ -62,13 +59,18 @@ or chunk is ever common to two or more secrets files.
 It's probable that many backends will store the secrets file under its
 own private path.
 
-Backup sets
------------
+## Backup sets
+
+There may be multiple backup sets per secret, all sharing chunks.  Each
+backup set is stored under a random 384-bit name, which has no meaning
+and is normally not user-visible.
 
 Each logical backup forms a 'backup set,' which is a set of files and
 their associated metadata.  The backup set format is inspired by tar,
 but with some modifications for this use case, where data is stored
-separately from metadata.  Each backup set is a sequence of backup runs.
+separately from metadata.  Each backup set is a sequence of backup runs,
+preceded by a set header.  Each backup set is identified by a tag,
+defaulting to a random 384-bit value (not the same as its storage name).
 
 Each backup run is represented by a sequence of records, starting with a
 start record indicating the date and the length in bytes of the
@@ -91,22 +93,108 @@ the IV appropriately.
 
 The final 48 bytes of the backup set consist of HMAC-SHA-384(metadata
 authentication key, encrypted backup set).  These bytes are not
-encrypted.
+encrypted.  The backup set MUST NOT be considered valid unless these
+final 48 bytes are correct.
 
 A property of the stream-oriented format is that a new backup run may
 be appended by overwriting the authentication tag (and further bytes)
 with the new data, then appending a new authentication tag.
 
-The start-backup-run record has the following format:
+### Set header
 
-  Byte Length
-    0     1    Version (currently 0)
-    1     1    Type (0 for start-backup-record)
-    2     8    Unix time in seconds when this record was written
-    10    4    Length in bytes of following records
+    Byte Length
+      0     1    Minimum version of the following runs
+      1     4    Backup tag length
+      5     -    Backup tag
 
-Files
------
+### Record format
+
+All backup run records share the same header:
+
+      Byte Length
+        0     1    Version (currently 0)
+        1     1    Type
+
+N.b.: all integers are unsigned unless otherwise noted.
+
+### Start record (type 0)
+
+      Byte Length
+        2     8    Unix time in seconds when this record was written
+        10    4    Length in bytes of following records
+
+### Hard link (type 1)
+
+The hard link does _not_ share the same header as generic files, below.
+The first link to a file is written normally, but any additional links
+are written as hard link records pointing to the first.
+
+      Byte Length
+        0     4    Path length
+        1     -    Path
+        -     4    Target path length
+        -     -    Target path
+
+### Generic file/directory header
+
+All files and directories share this header.
+
+      Byte Length
+        2     8    Mode
+       10     8    UID
+       18     8    GID
+       26     8    Atime
+       34     8    Mtime
+       42     8    Ctime
+       --------    begin variable-length fields
+       50     4    Path length
+       54     -    Path
+        -     4    Username length
+        -     -    Username
+        -     4    Groupname length
+        -     -    Groupname
+
+### Directory (type 2)
+
+There are no directory-specific data.
+
+### Regular file (type 3)
+
+      Length
+         8    File size in bytes
+         4    Number of chunks
+         -    Chunk addresses
+
+### FIFO (type 4)
+
+There are no FIFO-specific data.
+
+### Symlink (type 5)
+
+      Length
+         4    Target path length
+         -    Target path
+
+### Char device (type 6)
+
+      Length
+         8    Rdev
+
+### Block device (type 7)
+
+      Length
+         8    Rdev
+
+### End-of-run (type 8)
+
+The end-of-backup-run record consists of the SHA-384 of the hash of the
+data plaintext data of this entire run, from the start-of-run record to
+the last-but-one record.
+
+      Byte Length
+        2    48    SHA-384
+
+## File data
 
 A file's contents are broken up into 256K chunks (in a future version,
 variable-length chunks are a possibility).  Each chunk is encrypted with
@@ -134,16 +222,14 @@ KDF in Counter Mode protocol: HMAC-SHA-384(chunk master key, [0x00,
 "chunk encryption", 0x00, chunk nonce, 0x180]); the first 256 bits are
 the key and the following 128 bits are the IV.
 
-Use of Galois/Counter Mode
-==========================
+# Use of Galois/Counter Mode
 
 A future version of this protocol should convert all uses of CTR to GCM.
 In each case, a 128-bit authentication tag will be written before the
 384-bit HMAC; the HMAC will include the authentication tag in its
 authenticated data.
 
-Inspiration
-===========
+# Inspiration
 
 Cypherback is inspired by a number of projects, most notably tarsnap
 and cyphertite.  Thanks are also due to Ferguson, Schneier & Kohno for
