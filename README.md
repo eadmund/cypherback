@@ -79,8 +79,9 @@ record contains references to its contents.
 To run a backup, first the current backup set, if any, is downloaded,
 then all files which have changed since the previous backup are added to
 the backup set (FIXME: add a hash of each file's data to its record to
-help this?; FIXME: add deletion records), then their chunks are uploaded
-in random order, and finally the new backup set is uploaded.
+help this?; FIXME: add deletion records, making sure to handle
+add-delete-add of the same file efficiently), then their chunks are
+uploaded in random order, and finally the new backup set is uploaded.
 
 The entire backup set is encrypted with AES in CTR mode under the
 metadata encryption key; the IV is the metadata nonce concatenated
@@ -110,15 +111,20 @@ Files
 A file's contents are broken up into 256K chunks (in a future version,
 variable-length chunks are a possibility).  Each chunk is encrypted with
 AES in CTR mode under a unique chunk encryption key & IV as indicated
-below.  The chunk storage format consists of one plaintext byte of
-version (currently 0), then a 48-byte chunk nonce, then the encrypted
-chunk data, then a 48-byte authentication tag, given by
-HMAC-SHA-384(chunk authentication key, [version, chunk nonce,
-length(encrypted data), encrypted data]).
+below.
 
-The encrypted data within a chunk consist of one byte indicating
-compression, followed by the chunk data (either compressed or
-uncompressed).
+Each chunk has the following format:
+
+  Byte Length
+    0     1    Version (currently 0)
+    1    48    Chunk nonce
+   --------    begin AES-256-CTR
+   49     1      Compressed-p
+   50     n      Data
+   --------    end AES-256-CTR
+    ?    48    HMAC-SHA-384(chunk authentication key,
+                            [version, chunk nonce, length(encrypted data),
+                             encrypted data])
 
 Each chunk is stored under the name HMAC-SHA-384(chunk storage key,
 chunk plaintext).
