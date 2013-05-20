@@ -23,10 +23,10 @@ import (
 	"code.google.com/p/go.crypto/pbkdf2"
 	"crypto/aes"
 	"crypto/cipher"
-	"encoding/hex"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math/big"
@@ -35,14 +35,13 @@ import (
 
 type Secrets struct {
 	// AES-256 keys
-	metadataEncryption []byte
-	chunkMaster        []byte
+	metadataMaster  []byte
+	chunkMaster     []byte
+	metadataStorage []byte
 	// HMAC-SHA-384 keys
 	metadataAuthentication []byte
 	chunkAuthentication    []byte
 	chunkStorage           []byte
-	// 64-bit nonce
-	metadataNonce []byte
 	// all the above are []byte rather than [32]byte, [48]byte or
 	// [8]byte in order to eliminate unnecessary copying, which
 	// could lead to unzeroed keys in RAM
@@ -62,7 +61,7 @@ func genKey(length int) (key []byte, err error) {
 
 func generateSecrets() (secrets *Secrets, err error) {
 	secrets = &Secrets{}
-	secrets.metadataEncryption, err = genKey(32)
+	secrets.metadataMaster, err = genKey(32)
 	if err != nil {
 		return nil, err
 	}
@@ -78,11 +77,11 @@ func generateSecrets() (secrets *Secrets, err error) {
 	if err != nil {
 		return nil, err
 	}
-	secrets.chunkStorage, err = genKey(48)
+	secrets.metadataStorage, err = genKey(48)
 	if err != nil {
 		return nil, err
 	}
-	secrets.metadataNonce, err = genKey(8)
+	secrets.chunkStorage, err = genKey(48)
 	if err != nil {
 		return nil, err
 	}
@@ -189,11 +188,11 @@ func writeSecrets(secrets *Secrets, backend Backend) (err error) {
 	ctrWriter := cipher.StreamWriter{S: cipher.NewCTR(cypher, iv),
 		W: writer}
 
-	n, err = ctrWriter.Write(secrets.metadataEncryption)
+	n, err = ctrWriter.Write(secrets.metadataMaster)
 	if err != nil {
 		return err
 	}
-	if n != len(secrets.metadataEncryption) {
+	if n != len(secrets.metadataMaster) {
 		return fmt.Errorf("Error writing secrets file")
 	}
 
@@ -205,11 +204,11 @@ func writeSecrets(secrets *Secrets, backend Backend) (err error) {
 		return fmt.Errorf("Error writing secrets file")
 	}
 
-	n, err = ctrWriter.Write(secrets.metadataNonce)
+	n, err = ctrWriter.Write(secrets.metadataStorage)
 	if err != nil {
 		return err
 	}
-	if n != len(secrets.metadataNonce) {
+	if n != len(secrets.metadataStorage) {
 		return fmt.Errorf("Error writing secrets file")
 	}
 
@@ -333,13 +332,13 @@ func ReadSecrets(backend Backend) (secrets *Secrets, err error) {
 		R: reader}
 
 	secrets = &Secrets{}
-	secrets.metadataEncryption = make([]byte, 32)
-	n, err = ctrReader.Read(secrets.metadataEncryption)
+	secrets.metadataMaster = make([]byte, 32)
+	n, err = ctrReader.Read(secrets.metadataMaster)
 	if err != nil {
 		ZeroSecrets(secrets)
 		return nil, err
 	}
-	if n != len(secrets.metadataEncryption) {
+	if n != len(secrets.metadataMaster) {
 		ZeroSecrets(secrets)
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
@@ -353,13 +352,13 @@ func ReadSecrets(backend Backend) (secrets *Secrets, err error) {
 		ZeroSecrets(secrets)
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
-	secrets.metadataNonce = make([]byte, 8)
-	n, err = ctrReader.Read(secrets.metadataNonce)
+	secrets.metadataStorage = make([]byte, 48)
+	n, err = ctrReader.Read(secrets.metadataStorage)
 	if err != nil {
 		ZeroSecrets(secrets)
 		return nil, err
 	}
-	if n != len(secrets.metadataNonce) {
+	if n != len(secrets.metadataStorage) {
 		ZeroSecrets(secrets)
 		return nil, fmt.Errorf("Error reading secrets file")
 	}
@@ -415,9 +414,9 @@ func ZeroSecrets(secrets *Secrets) {
 	if secrets == nil {
 		return
 	}
-	if secrets.metadataEncryption != nil {
-		zeroKey(secrets.metadataEncryption, 32, "metadata encryption key")
-		secrets.metadataEncryption = nil
+	if secrets.metadataMaster != nil {
+		zeroKey(secrets.metadataMaster, 32, "metadata encryption key")
+		secrets.metadataMaster = nil
 	}
 	if secrets.chunkMaster != nil {
 		zeroKey(secrets.chunkMaster, 32, "chunk encryption key")
@@ -427,6 +426,10 @@ func ZeroSecrets(secrets *Secrets) {
 		zeroKey(secrets.metadataAuthentication, 48, "metadata authentication key")
 		secrets.metadataAuthentication = nil
 	}
+	if secrets.metadataStorage != nil {
+		zeroKey(secrets.metadataStorage, 48, "metadata authentication key")
+		secrets.metadataStorage = nil
+	}
 	if secrets.chunkAuthentication != nil {
 		zeroKey(secrets.chunkAuthentication, 48, "chunk authentication key")
 		secrets.chunkAuthentication = nil
@@ -434,10 +437,6 @@ func ZeroSecrets(secrets *Secrets) {
 	if secrets.chunkStorage != nil {
 		zeroKey(secrets.chunkStorage, 48, "chunk storage")
 		secrets.chunkStorage = nil
-	}
-	if secrets.metadataNonce != nil {
-		zeroKey(secrets.metadataNonce, 8, "metadata nonce")
-		secrets.metadataNonce = nil
 	}
 	return
 }
@@ -460,9 +459,9 @@ func (secrets *Secrets) Id() []byte {
 	digester := sha512.New384()
 	// no errors are possible from hash.Write, per the docs
 	digester.Write([]byte("cypherback\x00"))
-	digester.Write(secrets.metadataEncryption)
+	digester.Write(secrets.metadataMaster)
 	digester.Write(secrets.metadataAuthentication)
-	digester.Write(secrets.metadataNonce)
+	digester.Write(secrets.metadataStorage)
 	digester.Write(secrets.chunkMaster)
 	digester.Write(secrets.chunkAuthentication)
 	digester.Write(secrets.chunkStorage)

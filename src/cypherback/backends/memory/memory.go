@@ -15,11 +15,32 @@
 // You should have received a copy of the GNU General Public License
 // along with Cypherback.  If not, see <http://www.gnu.org/licenses/>.
 
-package cypherback
+package memory
 
-type Backend interface {
-	WriteSecrets(id string, encSecrets []byte) error
-	ReadSecrets() ([]byte, error)
-	/*FindBackupSet(tag string) (id, data []byte, err error)
-	WriteBackupSet(id, data []byte) error*/
+import (
+	"fmt"
+)
+
+type MemoryBackend struct {
+	secrets        map[string][]byte
+	defaultSecrets []byte
+}
+
+func New() *MemoryBackend {
+	return &MemoryBackend{secrets: make(map[string][]byte)}
+}
+
+func (mb *MemoryBackend) WriteSecrets(id string, encSecrets []byte) (err error) {
+	mb.secrets[id] = encSecrets
+	if mb.defaultSecrets == nil {
+		mb.defaultSecrets = encSecrets
+	}
+	return nil
+}
+
+func (mb *MemoryBackend) ReadSecrets() (encSecrets []byte, err error) {
+	if mb.defaultSecrets != nil {
+		return mb.defaultSecrets, nil
+	}
+	return nil, fmt.Errorf("No default")
 }

@@ -12,10 +12,10 @@ primitives are implemented in the Go language libraries.
 
 ## Keys
 
-There are five keys in use: a 256-bit metadata encryption key; a
-384-bit metadata authentication key; a 384-bit chunk master key; a
-384-bit chunk authentication key; and a 384-bit chunk storage key.
-There is also a 64-bit metadata nonce.
+There are six keys in use: a 384-bit metadata storage key, a 256-bit
+metadata encryption key; a 384-bit metadata authentication key; a
+384-bit chunk master key; a 384-bit chunk authentication key; and a
+384-bit chunk storage key.
 
 ## Secrets
 
@@ -29,10 +29,9 @@ appended.
 This follows NIST SP 800-38F, which specifies that keys may be stored
 under an approved encryption mode and an approved authentication mode.
 
-A secrets file is uniquely identified by SHA-384(["cypherback", version,
-metadata encryption key, metadata authentication key, metadata nonce,
-chunk master key, chunk authentication key, chunk storage key]), where
-version equals a zero byte for this documented version.
+A secrets file is uniquely identified by
+SHA-384(["cypherback", version, metadata encryption key, metadata authentication key, chunk master key, chunk authentication key, chunk storage key]),
+where version equals a zero byte for this documented version.
 
 The current secrets file format is:
 
@@ -43,14 +42,14 @@ The current secrets file format is:
          41   48    SHA-384([KEK, KAK])
          99   16    IV
         --------    begin AES-256-CTR
-        115   32      metadata encryption key
+        115   32      metadata master key
         147   48      metadata authentication key
-        195    8      metadata nonce
-        203   32      chunk master key
-        235   48      chunk authentication key
-        283   48      chunk storage key
+        195   48      metadata storage key
+        243   32      chunk master key
+        275   48      chunk authentication key
+        323   48      chunk storage key
         --------    end AES-256-CTR
-        331   48    HMAC-SHA-384(authentication key, bytes 0-330)
+        323   48    HMAC-SHA-384(authentication key, bytes 0-330)
 
 A single invoker of cypherback may control multiple secrets files, but
 only one secrets file is in use at any one time; that is, no backup set
@@ -85,16 +84,22 @@ help this?; FIXME: add deletion records, making sure to handle
 add-delete-add of the same file efficiently), then their chunks are
 uploaded in random order, and finally the new backup set is uploaded.
 
-The entire backup set is encrypted with AES in CTR mode under the
-metadata encryption key; the IV is the metadata nonce concatenated
-with 64 zero bits.  This means that is possible to determine the IV to
-use for any block within the backup set stream simply by incrementing
-the IV appropriately.
+The backup set is encrypted with AES in CTR mode under a key derived
+from the metadata master key and a backup set nonce, as described
+below.
+
+The metadata encryption key and IV are generated under the NIST SP
+800-108 KDF in Counter Mode protocol: HMAC-SHA-384(metadata master
+key, [0x00, "metadata encryption", 0x00, backup set nonce, 0x180]);
+the first 256 bits are the key and the following 128 bits are the IV.
+
+The nonce MUST be regenerated if any backup set information is
+rewritten (e.g. when expiring old backup sets).
 
 The final 48 bytes of the backup set consist of HMAC-SHA-384(metadata
-authentication key, encrypted backup set).  These bytes are not
-encrypted.  The backup set MUST NOT be considered valid unless these
-final 48 bytes are correct.
+authentication key, [key, IV, backup set data as written]).  These
+bytes are not encrypted.  The backup set MUST NOT be considered valid
+unless these final 48 bytes are correct.
 
 A property of the stream-oriented format is that a new backup run may
 be appended by overwriting the authentication tag (and further bytes)
@@ -102,10 +107,17 @@ with the new data, then appending a new authentication tag.
 
 ### Set header
 
+The set begins with a set header.  As noted above, the set nonce MUST
+be regenerated whenever the set is changed in any way other than being
+appended to.
+
     Byte Length
       0     1    Minimum version of the following runs
-      1     4    Backup tag length
-      5     -    Backup tag
+      1    48    Backup set nonce
+     --------    begin AES-256-CTR
+     49     4      Backup tag length
+     53     -      Backup tag
+      -    48      HMAC-SHA-384(metadata authentication key, [min-version, nonce, key, IV, backup tag length, backup tag)
 
 ### Record format
 
@@ -211,7 +223,7 @@ Each chunk has the following format:
    50     n      Data
    --------    end AES-256-CTR
     ?    48    HMAC-SHA-384(chunk authentication key,
-                            [version, chunk nonce, length(encrypted data),
+                            [version, chunk nonce, key, IV, length(encrypted data),
                              encrypted data])
 
 Each chunk is stored under the name HMAC-SHA-384(chunk storage key,

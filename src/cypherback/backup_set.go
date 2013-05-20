@@ -23,6 +23,7 @@ import (
 	"compress/lzw"
 	"crypto/hmac"
 	"crypto/sha512"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -252,5 +253,51 @@ func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) baseFileInfo 
 
 // EnsureSet will return the backup set named NAME, creating it if necessary
 func EnsureSet(secrets *Secrets, name string) (b *BackupSet, err error) {
-	return nil, fmt.Errorf("Unimplemented")
+	return nil, fmt.Errorf("Unimplemented %s", name)
+}
+
+func fileToName(file *os.File) (name string, err error) {
+	info, err := file.Stat()
+	if err != nil {
+		return "*unknown file*", err
+	}
+	return info.Name(), nil
+}
+
+func ReadTag(file *os.File) (tag string, err error) {
+	name, _ := fileToName(file)
+
+	version := make([]byte, 1)
+	n, err := file.Read(version)
+	// checking before processing because file must always have more
+	// than just a version, so EOF is an error here
+	if err != nil {
+		return "", err
+	}
+	if n != 1 {
+		return "", fmt.Errorf("Couldn't read version from backup set %s", name)
+	}
+	if len(version) != 1 || version[0] != 0 {
+		return "", fmt.Errorf("Unknown file version %d in %s", version, name)
+	}
+	// FIXME: decrypt; it's not in plaintext
+	tagLenBytes := make([]byte, 4)
+	n, err = file.Read(tagLenBytes)
+	if n != 4 {
+		return "", fmt.Errorf("Couldn't read tag length from %s", name)
+	}
+	var tagLen int32
+	err = binary.Read(file, binary.BigEndian, tagLen)
+	if err != nil {
+		return "", err
+	}
+	tagBytes := make([]byte, tagLen)
+	n, err = file.Read(tagBytes)
+	if n != int(tagLen) {
+		return "", fmt.Errorf("Couldn't read entire tag from %s", name)
+	}
+	if err != io.EOF && err != nil {
+		return "", err
+	}
+	return string(tagBytes), nil
 }

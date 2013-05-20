@@ -18,6 +18,8 @@
 package file
 
 import (
+	"cypherback"
+	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -70,6 +72,54 @@ func (fb *FileBackend) ReadSecrets() (encSecrets []byte, err error) {
 	}
 	defer file.Close()
 	return ioutil.ReadAll(file)
+}
+
+func (fb *FileBackend) EnsureBackupSet(secrets *cypherback.Secrets, tag string) (b *cypherback.BackupSet, err error) {
+	// scan all backup sets to see if any one is the indicated one;
+	// if not, create a new one
+	// FIXME: someday implement an index
+	var setFile string
+	path := filepath.Join(fb.path, hex.EncodeToString(secrets.Id()), "sets")
+	info, err := os.Stat(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		os.MkdirAll(path, os.ModePerm)
+		info, err = os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", path)
+	}
+	checkFunc := func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		tagBytes, err := cypherback.ReadTag(file)
+		if err != nil {
+			return err
+		}
+		if string(tagBytes) != tag {
+			return nil
+		}
+		setFile = path
+		return nil
+	}
+	err = filepath.Walk(path, checkFunc)
+	if err != nil {
+		return nil, err
+	}
+	if setFile == "" {
+		// create the backup set file
+	}
+	return nil, fmt.Errorf("Unimplemented")
 }
 
 func NewFileBackend(path string) *FileBackend {
