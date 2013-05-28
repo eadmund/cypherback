@@ -49,7 +49,7 @@ The current secrets file format is:
         275   48      chunk authentication key
         323   48      chunk storage key
         --------    end AES-256-CTR
-        323   48    HMAC-SHA-384(authentication key, bytes 0-330)
+        371   48    HMAC-SHA-384(authentication key, bytes 0-370)
 
 A single invoker of cypherback may control multiple secrets files, but
 only one secrets file is in use at any one time; that is, no backup set
@@ -90,7 +90,8 @@ below.
 
 The metadata encryption key and IV are generated under the NIST SP
 800-108 KDF in Counter Mode protocol: HMAC-SHA-384(metadata master
-key, [0x00, "metadata encryption", 0x00, backup set nonce, 0x180]);
+key,
+[0x0000000000000000, "metadata encryption", 0x00, backup set nonce, 0x0000000000000180]);
 the first 256 bits are the key and the following 128 bits are the IV.
 
 The nonce MUST be regenerated if any backup set information is
@@ -132,7 +133,7 @@ N.b.: all integers are unsigned unless otherwise noted.
 ### Start record (type 0)
 
       Byte Length
-        2     8    Unix time in seconds when this record was written
+         2    8    Unix time in seconds when this record was written
         10    4    Length in bytes of following records
 
 ### Hard link (type 1)
@@ -231,7 +232,7 @@ chunk plaintext).
 
 The chunk encryption key and IV are generated under the NIST SP 800-108
 KDF in Counter Mode protocol: HMAC-SHA-384(chunk master key, [0x00,
-"chunk encryption", 0x00, chunk nonce, 0x180]); the first 256 bits are
+"chunk encryption", 0x00, chunk nonce, 0x0180]); the first 256 bits are
 the key and the following 128 bits are the IV.
 
 # Use of Galois/Counter Mode

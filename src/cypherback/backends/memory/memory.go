@@ -24,10 +24,13 @@ import (
 type MemoryBackend struct {
 	secrets        map[string][]byte
 	defaultSecrets []byte
+	backupSets     map[string][]byte
 }
 
 func New() *MemoryBackend {
-	return &MemoryBackend{secrets: make(map[string][]byte)}
+	return &MemoryBackend{secrets: make(map[string][]byte),
+		backupSets: make(map[string][]byte),
+	}
 }
 
 func (mb *MemoryBackend) WriteSecrets(id string, encSecrets []byte) (err error) {
@@ -43,4 +46,17 @@ func (mb *MemoryBackend) ReadSecrets() (encSecrets []byte, err error) {
 		return mb.defaultSecrets, nil
 	}
 	return nil, fmt.Errorf("No default")
+}
+
+func (mb *MemoryBackend) WriteBackupSet(id string, data []byte) (err error) {
+	mb.backupSets[id] = data
+	return nil
+}
+
+func (mb *MemoryBackend) ReadBackupSet(id string) (data []byte, err error) {
+	data, ok := mb.backupSets[id]
+	if ok {
+		return data, nil
+	}
+	return nil, fmt.Errorf("Could not retrieve backup set")
 }

@@ -50,7 +50,7 @@ Byte Length
   -   48    HMAC-SHA-384(chunk authentication key, all preceding bytes)
 
 Each chunk is stored to the backing store under the name
-HMAC-SHA-384(chunk storage key, plaintext). 
+HMAC-SHA-384(chunk storage key, plaintext).
 
 */
 
@@ -63,11 +63,7 @@ emit all path/info tuples
 // found, appending to a list which is return; in later versions, do
 // smarter things like having workers &c.
 
-func ProcessPath(path string, secrets *Secrets) (err error) {
-	backupSet, err := newBackupSet(secrets)
-	if err != nil {
-		return err
-	}
+func ProcessPath(backupSet *BackupSet, path string) (err error) {
 	walkfunc := func(path string, info os.FileInfo, err error) error {
 		record, err := backupSet.fileRecordFromFileInfo(path, info)
 		if err != nil {
@@ -77,7 +73,6 @@ func ProcessPath(path string, secrets *Secrets) (err error) {
 		return nil
 	}
 	filepath.Walk(path, walkfunc)
-	fmt.Println(backupSet)
 	return nil
 }
 
@@ -85,7 +80,7 @@ type encWriter struct {
 	writer   io.Writer
 	buf      []byte
 	cypher   cipher.Stream
-	iv       []byte
+	nonce    []byte
 	authHMAC hash.Hash
 }
 
@@ -98,12 +93,12 @@ func (ew encWriter) Write(b []byte) (int, error) {
 
 func (ew encWriter) Close() error {
 	writer := io.MultiWriter(ew.writer, ew.authHMAC)
-	_, err := writer.Write([]byte{0, 1}) // version, compression always true
+	_, err := writer.Write([]byte{0}) // version
 	if err != nil {
 		return err
 	}
 
-	_, err = writer.Write(ew.iv)
+	_, err = writer.Write(ew.nonce)
 	if err != nil {
 		return err
 	}
@@ -117,7 +112,14 @@ func (ew encWriter) Close() error {
 	}
 
 	stream := cipher.StreamWriter{S: ew.cypher, W: writer}
-	n, err := stream.Write(ew.buf)
+	n, err := stream.Write([]byte{1}) // compression always true
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("Out-of-sync keystream")
+	}
+	n, err = stream.Write(ew.buf)
 	if err != nil {
 		return err
 	}
@@ -130,16 +132,23 @@ func (ew encWriter) Close() error {
 }
 
 func newEncWriter(w io.Writer, secrets *Secrets) (*encWriter, error) {
-	aesCypher, err := aes.NewCipher(secrets.chunkMaster)
+	nonce, err := genKey(48)
 	if err != nil {
 		return nil, err
 	}
-	iv, err := genKey(16)
+	digester := hmac.New(sha512.New384, secrets.chunkMaster)
+	digester.Write([]byte("\000chunk encryption\000"))
+	digester.Write(nonce)
+	digester.Write([]byte{0x01, 0x80})
+	derivedKey := digester.Sum(nil)
+	key := derivedKey[0:32]
+	iv := derivedKey[32:48]
+	aesCypher, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
 	cypher := cipher.NewCTR(aesCypher, iv)
 	authHMAC := hmac.New(sha512.New384, secrets.chunkAuthentication)
 	authHMAC.Write([]byte{0}) // file version
-	return &encWriter{w, make([]byte, 0), cypher, iv, authHMAC}, nil
+	return &encWriter{w, make([]byte, 0), cypher, nonce, authHMAC}, nil
 }

@@ -26,6 +26,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha512"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -466,4 +467,19 @@ func (secrets *Secrets) Id() []byte {
 	digester.Write(secrets.chunkAuthentication)
 	digester.Write(secrets.chunkStorage)
 	return digester.Sum(nil)
+}
+
+func nistConcatKDF(keyDerivationKey, label, context []byte, bytes int) []byte {
+	iterations := (bytes + 48 - 1) / 48 // (x + y -1)/y == ceiling(x, y)
+	keyMat := make([]byte, 0, bytes)
+	for i := 0; i < iterations; i++ {
+		digester := hmac.New(sha512.New384, keyDerivationKey)
+		binary.Write(digester, binary.BigEndian, int64(i))
+		digester.Write(label)
+		digester.Write([]byte{0})
+		digester.Write(context)
+		binary.Write(digester, binary.BigEndian, int64(bytes*8))
+		keyMat = append(keyMat, digester.Sum(nil)...)
+	}
+	return keyMat
 }

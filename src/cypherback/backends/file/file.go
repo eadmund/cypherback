@@ -18,8 +18,6 @@
 package file
 
 import (
-	"cypherback"
-	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -74,54 +72,54 @@ func (fb *FileBackend) ReadSecrets() (encSecrets []byte, err error) {
 	return ioutil.ReadAll(file)
 }
 
-func (fb *FileBackend) EnsureBackupSet(secrets *cypherback.Secrets, tag string) (b *cypherback.BackupSet, err error) {
-	// scan all backup sets to see if any one is the indicated one;
-	// if not, create a new one
-	// FIXME: someday implement an index
-	var setFile string
-	path := filepath.Join(fb.path, hex.EncodeToString(secrets.Id()), "sets")
+func NewFileBackend(path string) *FileBackend {
+	return &FileBackend{path: path}
+}
+
+func (fb *FileBackend) WriteBackupSet(id string, data []byte) (err error) {
+	path := filepath.Join(fb.path, "sets")
 	info, err := os.Stat(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return nil, err
+			return err
 		}
 		os.MkdirAll(path, os.ModePerm)
 		info, err = os.Stat(path)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", path)
+		return fmt.Errorf("%s is not a directory", path)
 	}
-	checkFunc := func(path string, info os.FileInfo, err error) error {
+	path = filepath.Join(path, id)
+	info, err = os.Stat(path)
+	if os.IsNotExist(err) {
+		file, err := os.Create(path)
 		if err != nil {
 			return err
 		}
-		file, err := os.Open(path)
+		defer file.Close()
+		n, err := file.Write(data)
+		if n != len(data) {
+			return fmt.Errorf("Couldn't write all data")
+		}
 		if err != nil {
 			return err
 		}
-		tagBytes, err := cypherback.ReadTag(file)
-		if err != nil {
-			return err
-		}
-		if string(tagBytes) != tag {
-			return nil
-		}
-		setFile = path
-		return nil
 	}
-	err = filepath.Walk(path, checkFunc)
+	return nil
+}
+
+func (fb *FileBackend) ReadBackupSet(id string) (data []byte, err error) {
+	path := filepath.Join(fb.path, "sets", id)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	if setFile == "" {
-		// create the backup set file
+	data, err = ioutil.ReadAll(file)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("Unimplemented")
-}
-
-func NewFileBackend(path string) *FileBackend {
-	return &FileBackend{path: path}
+	return data, nil
 }

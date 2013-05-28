@@ -94,7 +94,7 @@ func main() {
 			return
 		}
 
-		_, err = cypherback.EnsureSet(secrets, setName)
+		backupSet, err := cypherback.EnsureBackupSet(backend, secrets, setName)
 
 		if err != nil {
 			logError("Error: %v", err)
@@ -102,8 +102,9 @@ func main() {
 		}
 
 		for _, path := range paths {
-			cypherback.ProcessPath(path, secrets)
+			cypherback.ProcessPath(backupSet, path)
 		}
+
 	default:
 		logError("Unknown command %s", os.Args[1])
 		return

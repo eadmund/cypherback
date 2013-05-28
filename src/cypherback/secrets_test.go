@@ -10,7 +10,6 @@ func TestGenerateSecrets(t *testing.T) {
 	secrets, err := GenerateSecrets(backend)
 	defer ZeroSecrets(secrets)
 	if err != nil {
-		t.Log(err)
-		t.Fail()
+		t.Error(err)
 	}
 }
