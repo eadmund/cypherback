@@ -8,8 +8,8 @@ import (
 
 func TestWriteReadBackupSet(t *testing.T) {
 	backend := memoryBackend.New()
-	backend.WriteBackupSet("foo", []byte("barbazquux"))
-	data, err := backend.ReadBackupSet("foo")
+	backend.WriteBackupSet("foo", "bar", []byte("barbazquux"))
+	data, err := backend.ReadBackupSet("foo", "bar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestBackupSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := EnsureBackupSet(secrets, "foo")
+	set, err := EnsureBackupSet(backend, secrets, "foo")
 	if err != nil {
 		t.Fatal(err)
 	}

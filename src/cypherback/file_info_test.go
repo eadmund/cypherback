@@ -19,6 +19,7 @@ package cypherback
 
 import (
 	//"fmt"
+	memoryBackend "cypherback/backends/memory"
 	"os"
 	"testing"
 )
@@ -42,5 +43,10 @@ func TestFileInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ProcessPath(".", secrets)
+	backend := memoryBackend.New()
+	backupSet, err := EnsureBackupSet(backend, secrets, "foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ProcessPath(backupSet, ".")
 }
