@@ -20,6 +20,8 @@ package cypherback
 type Backend interface {
 	WriteSecrets(id string, encSecrets []byte) error
 	ReadSecrets() ([]byte, error)
-	WriteBackupSet(id string, data []byte) error
-	ReadBackupSet(id string) (data []byte, err error)
+	WriteBackupSet(secretsId, id string, data []byte) error
+	ReadBackupSet(secretsId, id string) (data []byte, err error)
+	WriteChunk(secretsId, id string, data []byte) error
+	ReadChunk(secretsId, id string) (date []byte, err error)
 }

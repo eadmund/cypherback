@@ -72,8 +72,7 @@ func ProcessPath(backupSet *BackupSet, path string) (err error) {
 		backupSet.records = append(backupSet.records, record)
 		return nil
 	}
-	filepath.Walk(path, walkfunc)
-	return nil
+	return filepath.Walk(path, walkfunc)
 }
 
 type encWriter struct {

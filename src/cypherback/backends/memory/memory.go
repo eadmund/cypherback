@@ -25,11 +25,13 @@ type MemoryBackend struct {
 	secrets        map[string][]byte
 	defaultSecrets []byte
 	backupSets     map[string][]byte
+	chunks         map[string][]byte
 }
 
 func New() *MemoryBackend {
 	return &MemoryBackend{secrets: make(map[string][]byte),
 		backupSets: make(map[string][]byte),
+		chunks:     make(map[string][]byte),
 	}
 }
 
@@ -48,15 +50,28 @@ func (mb *MemoryBackend) ReadSecrets() (encSecrets []byte, err error) {
 	return nil, fmt.Errorf("No default")
 }
 
-func (mb *MemoryBackend) WriteBackupSet(id string, data []byte) (err error) {
+func (mb *MemoryBackend) WriteBackupSet(secretsId, id string, data []byte) (err error) {
 	mb.backupSets[id] = data
 	return nil
 }
 
-func (mb *MemoryBackend) ReadBackupSet(id string) (data []byte, err error) {
+func (mb *MemoryBackend) ReadBackupSet(secretsId, id string) (data []byte, err error) {
 	data, ok := mb.backupSets[id]
 	if ok {
 		return data, nil
 	}
 	return nil, fmt.Errorf("Could not retrieve backup set")
+}
+
+func (mb *MemoryBackend) WriteChunk(secretsId, id string, data []byte) error {
+	mb.chunks[id] = data
+	return nil
+}
+
+func (mb *MemoryBackend) ReadChunk(secretsId, id string) ([]byte, error) {
+	data, ok := mb.chunks[id]
+	if ok {
+		return data, nil
+	}
+	return nil, fmt.Errorf("Could not retrieve chunk")
 }

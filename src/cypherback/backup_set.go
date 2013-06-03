@@ -556,9 +556,7 @@ func tagToId(secrets *Secrets, tag string) string {
 // if necessary
 func EnsureBackupSet(backend Backend, secrets *Secrets, tag string) (b *BackupSet, err error) {
 	id := tagToId(secrets, tag)
-	fmt.Printf("id: %s\n", id)
-
-	existingData, err := backend.ReadBackupSet(id)
+	existingData, err := backend.ReadBackupSet(secrets.HexId(), id)
 	if err != nil {
 		set, err := newBackupSet(tag, secrets)
 		if err != nil {
@@ -566,7 +564,6 @@ func EnsureBackupSet(backend Backend, secrets *Secrets, tag string) (b *BackupSe
 		}
 		return set, nil
 	}
-	fmt.Printf("%d\n", len(existingData))
 	return decodeBackupSet(secrets, existingData)
 }
 
@@ -662,7 +659,10 @@ func (b *BackupSet) encode() ([]byte, error) {
 }
 
 func decodeBackupSet(secrets *Secrets, data []byte) (*BackupSet, error) {
-	b := &BackupSet{}
+	b, err := newBackupSet("", secrets)
+	if err != nil {
+		return nil, err
+	}
 	digester := hmac.New(sha512.New384, secrets.metadataAuthentication)
 	buffer := bytes.NewReader(data)
 	reader := io.TeeReader(buffer, digester)
@@ -837,8 +837,28 @@ func (b *BackupSet) Write(backend Backend) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(len(encSet))
-	return backend.WriteBackupSet(tagToId(b.secrets, b.tag), encSet)
+	secretsId := b.secrets.HexId()
+	chunkInfo, err := ioutil.ReadDir(b.tempDir)
+	if err != nil {
+		return err
+	}
+	for i := range chunkInfo {
+		path := filepath.Join(b.tempDir, chunkInfo[i].Name())
+		chunkFile, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		chunk, err := ioutil.ReadAll(chunkFile)
+		if err != nil {
+			return err
+		}
+		err = backend.WriteChunk(secretsId, filepath.Base(path), chunk)
+		if err != nil {
+			return err
+		}
+	}
+
+	return backend.WriteBackupSet(secretsId, tagToId(b.secrets, b.tag), encSet)
 }
 
 func readLenString(reader io.Reader, length uint32) (string, error) {

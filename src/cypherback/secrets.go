@@ -50,12 +50,12 @@ type Secrets struct {
 
 func genKey(length int) (key []byte, err error) {
 	key = make([]byte, length)
-	n, err := rand.Reader.Read(key)
+	n, err := io.ReadFull(rand.Reader, key)
 	if err != nil {
 		return nil, err
 	}
 	if n != length {
-		return nil, fmt.Errorf("Couldn't read enough random bytes")
+		return nil, fmt.Errorf("Couldn't read enough random bytes (wanted %d; got %d)", length)
 	}
 	return key, nil
 }
@@ -467,6 +467,10 @@ func (secrets *Secrets) Id() []byte {
 	digester.Write(secrets.chunkAuthentication)
 	digester.Write(secrets.chunkStorage)
 	return digester.Sum(nil)
+}
+
+func (s *Secrets) HexId() string {
+	return hex.EncodeToString(s.Id())
 }
 
 func nistConcatKDF(keyDerivationKey, label, context []byte, bytes int) []byte {

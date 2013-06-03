@@ -76,18 +76,15 @@ func NewFileBackend(path string) *FileBackend {
 	return &FileBackend{path: path}
 }
 
-func (fb *FileBackend) WriteBackupSet(id string, data []byte) (err error) {
-	path := filepath.Join(fb.path, "sets")
+func (fb *FileBackend) WriteBackupSet(secretsId, id string, data []byte) (err error) {
+	path := filepath.Join(fb.path, secretsId, "sets")
+	err = os.MkdirAll(path, os.ModePerm)
+	if err != nil {
+		return err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		os.MkdirAll(path, os.ModePerm)
-		info, err = os.Stat(path)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a directory", path)
@@ -111,13 +108,58 @@ func (fb *FileBackend) WriteBackupSet(id string, data []byte) (err error) {
 	return nil
 }
 
-func (fb *FileBackend) ReadBackupSet(id string) (data []byte, err error) {
-	path := filepath.Join(fb.path, "sets", id)
+func (fb *FileBackend) ReadBackupSet(secretsId, id string) (data []byte, err error) {
+	path := filepath.Join(fb.path, secretsId, "sets", id)
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	data, err = ioutil.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (fb *FileBackend) WriteChunk(secretsId, id string, data []byte) error {
+	path := filepath.Join(fb.path, secretsId, "chunks")
+	err := os.MkdirAll(path, os.ModePerm)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", path)
+	}
+	path = filepath.Join(path, id)
+	info, err = os.Stat(path)
+	if os.IsNotExist(err) {
+		file, err := os.Create(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		n, err := file.Write(data)
+		if n != len(data) {
+			return fmt.Errorf("Couldn't write all data")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (fb *FileBackend) ReadChunk(secretsId, id string) ([]byte, error) {
+	path := filepath.Join(fb.path, secretsId, "chunks", id)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := ioutil.ReadAll(file)
 	if err != nil {
 		return nil, err
 	}

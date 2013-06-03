@@ -44,7 +44,7 @@ func exit() {
 }
 
 func logError(format string, args ...interface{}) {
-	log.Printf(format, args...)
+	log.Printf(format+"\n", args...)
 	exitCode = 1
 }
 
@@ -95,7 +95,6 @@ func main() {
 		}
 
 		backupSet, err := cypherback.EnsureBackupSet(backend, secrets, setName)
-
 		if err != nil {
 			logError("Error: %v", err)
 			return
@@ -107,7 +106,11 @@ func main() {
 			return
 		}
 		for _, path := range paths {
-			cypherback.ProcessPath(backupSet, path)
+			err = cypherback.ProcessPath(backupSet, path)
+			if err != nil {
+				logError("Error: %v", err)
+				return
+			}
 		}
 		err = backupSet.EndBackup()
 		if err != nil {
