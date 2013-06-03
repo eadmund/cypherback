@@ -101,10 +101,24 @@ func main() {
 			return
 		}
 
+		err = backupSet.StartBackup()
+		if err != nil {
+			logError("Error: %v", err)
+			return
+		}
 		for _, path := range paths {
 			cypherback.ProcessPath(backupSet, path)
 		}
-
+		err = backupSet.EndBackup()
+		if err != nil {
+			logError("Error: %v", err)
+			return
+		}
+		err = backupSet.Write(backend)
+		if err != nil {
+			logError("Error: %v", err)
+			return
+		}
 	default:
 		logError("Unknown command %s", os.Args[1])
 		return

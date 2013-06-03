@@ -113,12 +113,12 @@ be regenerated whenever the set is changed in any way other than being
 appended to.
 
     Byte Length
-      0     1    Minimum version of the following runs
+      0     1    Maximum version of the following runs
       1    48    Backup set nonce
      --------    begin AES-256-CTR
      49     4      Backup tag length
      53     -      Backup tag
-      -    48      HMAC-SHA-384(metadata authentication key, [min-version, nonce, key, IV, backup tag length, backup tag)
+      -    48      HMAC-SHA-384(metadata authentication key, [max-version, nonce, key, IV, backup tag length, backup tag)
 
 ### Record format
 
@@ -200,9 +200,8 @@ There are no FIFO-specific data.
 
 ### End-of-run (type 8)
 
-The end-of-backup-run record consists of the SHA-384 of the hash of the
-data plaintext data of this entire run, from the start-of-run record to
-the last-but-one record.
+The end-of-backup-run record consists of the SHA-384 of the plaintext data
+of this entire run, from the start-of-run record to the last-but-one record.
 
       Byte Length
         2    48    SHA-384

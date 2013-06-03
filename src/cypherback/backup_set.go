@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -44,12 +45,13 @@ type devInode struct {
 }
 
 type BackupSet struct {
-	tag        string
-	secrets    *Secrets
-	records    []fileRecord
-	hardLinks  map[devInode]string
-	seenChunks map[string]bool
-	tempDir    string
+	tag            string
+	secrets        *Secrets
+	records        []fileRecord
+	hardLinks      map[devInode]string
+	seenChunks     map[string]bool
+	tempDir        string
+	lastStartIndex int
 }
 
 func newBackupSet(tag string, secrets *Secrets) (backupSet *BackupSet, err error) {
@@ -64,24 +66,38 @@ func newBackupSet(tag string, secrets *Secrets) (backupSet *BackupSet, err error
 }
 
 type startRecord struct {
-	date   int64
+	date   time.Time
 	length uint32
 }
 
-func (r *startRecord) Record() (recordType uint8, data []byte) {
+func readStartRecord(reader io.Reader) (fileRecord, error) {
+	var seconds int64
+	var length uint32
+	err := binary.Read(reader, binary.BigEndian, &seconds)
+	if err != nil {
+		return nil, err
+	}
+	err = binary.Read(reader, binary.BigEndian, &length)
+	if err != nil {
+		return nil, err
+	}
+	return startRecord{date: time.Unix(seconds, 0), length: length}, nil
+}
+
+func (r startRecord) Record() (recordType uint8, data []byte) {
 	writer := &bytes.Buffer{}
-	binary.Write(writer, binary.BigEndian, r.date)
+	binary.Write(writer, binary.BigEndian, r.date.Unix())
 	binary.Write(writer, binary.BigEndian, r.length)
 	return 0, writer.Bytes()
 }
 
-func (r *startRecord) Len() int {
+func (r startRecord) Len() uint32 {
 	return 8 + 4
 }
 
 type fileRecord interface {
 	Record() (recordType uint8, data []byte)
-	Len() int
+	Len() uint32
 }
 
 // FIXME: handle extended attributes
@@ -98,7 +114,7 @@ type baseFileInfo struct {
 	cTime     time.Time
 }
 
-func (r *baseFileInfo) Record() []byte {
+func (r baseFileInfo) Record() []byte {
 	writer := &bytes.Buffer{}
 	binary.Write(writer, binary.BigEndian, int64(r.mode))
 	binary.Write(writer, binary.BigEndian, int64(r.uid))
@@ -115,8 +131,76 @@ func (r *baseFileInfo) Record() []byte {
 	return writer.Bytes()
 }
 
-func (r *baseFileInfo) Len() int {
-	return 8 + 8 + 8 + 8 + 8 + 8 + 4 + len(r.name) + 4 + len(r.userName) + 4 + len(r.groupName)
+func readBaseFileInfo(reader io.Reader) (b baseFileInfo, err error) {
+	var mode, uid, gid, atime, mtime, ctime int64
+	var nameLen, userNameLen, groupNameLen uint32
+	err = binary.Read(reader, binary.BigEndian, &mode)
+	if err != nil {
+		return b, err
+	}
+	b.mode = os.FileMode(mode)
+	err = binary.Read(reader, binary.BigEndian, &uid)
+	if err != nil {
+		return b, err
+	}
+	b.uid = uint32(uid)
+	err = binary.Read(reader, binary.BigEndian, &gid)
+	if err != nil {
+		return b, err
+	}
+	b.gid = uint32(gid)
+	err = binary.Read(reader, binary.BigEndian, &atime)
+	if err != nil {
+		return b, err
+	}
+	b.aTime = time.Unix(0, atime)
+	err = binary.Read(reader, binary.BigEndian, &mtime)
+	if err != nil {
+		return b, err
+	}
+	b.mTime = time.Unix(0, mtime)
+	err = binary.Read(reader, binary.BigEndian, &ctime)
+	if err != nil {
+		return b, err
+	}
+	b.cTime = time.Unix(0, ctime)
+	err = binary.Read(reader, binary.BigEndian, &nameLen)
+	if err != nil {
+		return b, err
+	}
+	b.name, err = readLenString(reader, nameLen)
+	if err != nil {
+		return b, err
+	}
+	err = binary.Read(reader, binary.BigEndian, &userNameLen)
+	if err != nil {
+		return b, err
+	}
+	b.userName, err = readLenString(reader, userNameLen)
+	if err != nil {
+		return b, err
+	}
+	err = binary.Read(reader, binary.BigEndian, &groupNameLen)
+	if err != nil {
+		return b, err
+	}
+	b.groupName, err = readLenString(reader, groupNameLen)
+	return b, err
+}
+
+// FIXME: need to check for _each_ Len that it does not exceed math.MaxUint32
+
+func (r baseFileInfo) Len() uint32 {
+	if len(r.name) > math.MaxUint32 {
+		panic(fmt.Errorf("Record name length > %d", math.MaxUint32))
+	}
+	if len(r.userName) > math.MaxUint32 {
+		panic(fmt.Errorf("Record username length > %d", math.MaxUint32))
+	}
+	if len(r.groupName) > math.MaxUint32 {
+		panic(fmt.Errorf("Record groupname length > %d", math.MaxUint32))
+	}
+	return 8 + 8 + 8 + 8 + 8 + 8 + 4 + uint32(len(r.name)) + 4 + uint32(len(r.userName)) + 4 + uint32(len(r.groupName))
 }
 
 type regularFileInfo struct {
@@ -125,30 +209,56 @@ type regularFileInfo struct {
 	chunks []string // FIXME: should be a [][]byte for efficiency
 }
 
-func (r *regularFileInfo) Record() (uint8, []byte) {
+func readRegularFile(reader io.Reader) (fileRecord, error) {
+	baseInfo, err := readBaseFileInfo(reader)
+	if err != nil {
+		return nil, err
+	}
+	r := regularFileInfo{baseInfo, 0, nil}
+	err = binary.Read(reader, binary.BigEndian, &r.size)
+	if err != nil {
+		return nil, err
+	}
+	var numChunks uint32
+	err = binary.Read(reader, binary.BigEndian, &numChunks)
+	for i := 0; i < int(numChunks); i++ {
+		chunk, err := readLenString(reader, 96)
+		if err != nil {
+			return nil, err
+		}
+		r.chunks = append(r.chunks, chunk)
+	}
+	return r, nil
+}
+
+func (r regularFileInfo) Record() (uint8, []byte) {
 	writer := &bytes.Buffer{}
 	writer.Write(r.baseFileInfo.Record())
 	binary.Write(writer, binary.BigEndian, r.size)
-	binary.Write(writer, binary.BigEndian, int32(len(r.chunks)))
+	binary.Write(writer, binary.BigEndian, uint32(len(r.chunks)))
 	for _, chunk := range r.chunks {
 		writer.Write([]byte(chunk))
 	}
 	return 3, writer.Bytes()
 }
 
-func (r *regularFileInfo) Len() int {
-	return r.baseFileInfo.Len() + 8 + 4 + 96*len(r.chunks)
+func (r regularFileInfo) Len() uint32 {
+	// FIXME: is this a practical max number of chunks?
+	if 96*len(r.chunks) > math.MaxUint32 {
+		panic(fmt.Errorf("Chunk length * 96 > %d", math.MaxUint32))
+	}
+	return uint32(r.baseFileInfo.Len()) + 8 + 4 + uint32(96*len(r.chunks))
 }
 
 type fifoInfo struct {
 	baseFileInfo
 }
 
-func (r *fifoInfo) Record() (uint8, []byte) {
+func (r fifoInfo) Record() (uint8, []byte) {
 	return 3, r.baseFileInfo.Record()
 }
 
-func (r *fifoInfo) Len() int {
+func (r fifoInfo) Len() uint32 {
 	return r.baseFileInfo.Len()
 }
 
@@ -157,7 +267,39 @@ type hardLinkInfo struct {
 	linkPath string
 }
 
-func (r *hardLinkInfo) Record() (uint8, []byte) {
+func readHardLink(reader io.Reader) (fileRecord, error) {
+	var pathLength uint32
+	var path string
+	var targetPathLength uint32
+	var targetPath string
+	err := binary.Read(reader, binary.BigEndian, &pathLength)
+	if err != nil {
+		return nil, err
+	}
+	pathBytes := make([]byte, pathLength)
+	n, err := reader.Read(pathBytes)
+	if err != nil {
+		return nil, err
+	}
+	if uint32(n) != pathLength {
+		return nil, fmt.Errorf("Error decoding backup set")
+	}
+	err = binary.Read(reader, binary.BigEndian, &targetPathLength)
+	if err != nil {
+		return nil, err
+	}
+	targetPathBytes := make([]byte, targetPathLength)
+	n, err = reader.Read(targetPathBytes)
+	if err != nil {
+		return nil, err
+	}
+	if uint32(n) != targetPathLength {
+		return nil, fmt.Errorf("Error decoding backup set")
+	}
+	return hardLinkInfo{name: path, linkPath: targetPath}, nil
+}
+
+func (r hardLinkInfo) Record() (uint8, []byte) {
 	writer := &bytes.Buffer{}
 	binary.Write(writer, binary.BigEndian, int32(len(r.name)))
 	writer.Write([]byte(r.name))
@@ -166,8 +308,14 @@ func (r *hardLinkInfo) Record() (uint8, []byte) {
 	return 1, writer.Bytes()
 }
 
-func (r *hardLinkInfo) Len() int {
-	return 4 + len(r.name) + 4 + len(r.name)
+func (r hardLinkInfo) Len() uint32 {
+	if len(r.name) > math.MaxUint32 {
+		panic(fmt.Errorf("Record name length > %d", math.MaxUint32))
+	}
+	if len(r.linkPath) > math.MaxUint32 {
+		panic(fmt.Errorf("Record link path > %d", math.MaxUint32))
+	}
+	return 4 + uint32(len(r.name)) + 4 + uint32(len(r.linkPath))
 }
 
 type symLinkInfo struct {
@@ -175,7 +323,7 @@ type symLinkInfo struct {
 	linkPath string
 }
 
-func (r *symLinkInfo) Record() (uint8, []byte) {
+func (r symLinkInfo) Record() (uint8, []byte) {
 	writer := &bytes.Buffer{}
 	writer.Write(r.baseFileInfo.Record())
 	binary.Write(writer, binary.BigEndian, int32(len(r.linkPath)))
@@ -183,8 +331,11 @@ func (r *symLinkInfo) Record() (uint8, []byte) {
 	return 5, writer.Bytes()
 }
 
-func (r *symLinkInfo) Len() int {
-	return r.baseFileInfo.Len() + 4 + len(r.linkPath)
+func (r symLinkInfo) Len() uint32 {
+	if len(r.linkPath) > math.MaxUint32 {
+		panic(fmt.Errorf("Link path > %d", math.MaxUint32))
+	}
+	return r.baseFileInfo.Len() + 4 + uint32(len(r.linkPath))
 }
 
 type deviceInfo struct {
@@ -192,13 +343,13 @@ type deviceInfo struct {
 	rdev uint64
 }
 
-func (r *deviceInfo) Record() []byte {
+func (r deviceInfo) Record() []byte {
 	writer := &bytes.Buffer{}
 	binary.Write(writer, binary.BigEndian, r.rdev)
 	return writer.Bytes()
 }
 
-func (r *deviceInfo) Len() int {
+func (r deviceInfo) Len() uint32 {
 	return r.baseFileInfo.Len() + 8
 }
 
@@ -206,7 +357,7 @@ type charDeviceInfo struct {
 	deviceInfo
 }
 
-func (r *charDeviceInfo) Record() (uint8, []byte) {
+func (r charDeviceInfo) Record() (uint8, []byte) {
 	return 6, r.deviceInfo.Record()
 }
 
@@ -214,7 +365,7 @@ type blockDeviceInfo struct {
 	deviceInfo
 }
 
-func (r *blockDeviceInfo) Record() (uint8, []byte) {
+func (r blockDeviceInfo) Record() (uint8, []byte) {
 	return 7, r.deviceInfo.Record()
 }
 
@@ -223,11 +374,16 @@ type directoryInfo struct {
 	//contents []BaseFileInfo
 }
 
-func (r *directoryInfo) Record() (uint8, []byte) {
+func readDirectory(reader io.Reader) (fileRecord, error) {
+	base, err := readBaseFileInfo(reader)
+	return directoryInfo{base}, err
+}
+
+func (r directoryInfo) Record() (uint8, []byte) {
 	return 2, r.baseFileInfo.Record()
 }
 
-func (r *directoryInfo) Len() int {
+func (r directoryInfo) Len() uint32 {
 	return r.baseFileInfo.Len()
 }
 
@@ -235,11 +391,20 @@ type endRecord struct {
 	hash []byte
 }
 
-func (r *endRecord) Record() (uint8, []byte) {
+func readEndRecord(reader io.Reader) (fileRecord, error) {
+	hash := make([]byte, 48)
+	_, err := io.ReadFull(reader, hash)
+	if err != nil {
+		return nil, err
+	}
+	return endRecord{hash}, nil
+}
+
+func (r endRecord) Record() (uint8, []byte) {
 	return 8, r.hash
 }
 
-func (r *endRecord) Len() int {
+func (r endRecord) Len() uint32 {
 	return 48
 }
 
@@ -348,7 +513,7 @@ func (b *BackupSet) newRegularFileInfo(path string, info os.FileInfo) (fileInfo 
 			return nil, err
 		}
 	}
-	fmt.Println(">", info.Size(), fileInfo.chunks)
+	//fmt.Println(">", info.Size(), fileInfo.chunks)
 	return fileInfo, nil
 }
 
@@ -381,13 +546,17 @@ func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) baseFileInfo 
 	panic("Can't get here")
 }
 
+func tagToId(secrets *Secrets, tag string) string {
+	digester := hmac.New(sha512.New384, secrets.metadataStorage)
+	digester.Write([]byte(tag))
+	return hex.EncodeToString(digester.Sum(nil))
+}
+
 // EnsureBackupSet will return the backup set tagged TAG, creating it
 // if necessary
 func EnsureBackupSet(backend Backend, secrets *Secrets, tag string) (b *BackupSet, err error) {
-	digester := hmac.New(sha512.New384, secrets.metadataStorage)
-	digester.Write([]byte(tag))
-	id := hex.EncodeToString(digester.Sum(nil))
-	fmt.Printf("id: %s", id)
+	id := tagToId(secrets, tag)
+	fmt.Printf("id: %s\n", id)
 
 	existingData, err := backend.ReadBackupSet(id)
 	if err != nil {
@@ -397,8 +566,8 @@ func EnsureBackupSet(backend Backend, secrets *Secrets, tag string) (b *BackupSe
 		}
 		return set, nil
 	}
-	fmt.Printf("%d", len(existingData))
-	return nil, fmt.Errorf("Unimplemented %s", tag)
+	fmt.Printf("%d\n", len(existingData))
+	return decodeBackupSet(secrets, existingData)
 }
 
 func fileToName(file *os.File) (name string, err error) {
@@ -409,7 +578,7 @@ func fileToName(file *os.File) (name string, err error) {
 	return info.Name(), nil
 }
 
-func (b *BackupSet) Encode() ([]byte, error) {
+func (b *BackupSet) encode() ([]byte, error) {
 	digester := hmac.New(sha512.New384, b.secrets.metadataAuthentication)
 	buffer := &bytes.Buffer{}
 	writer := io.MultiWriter(digester, buffer)
@@ -443,12 +612,18 @@ func (b *BackupSet) Encode() ([]byte, error) {
 	exitEarlyDigester.Write(nonce)
 	exitEarlyDigester.Write(key)
 	exitEarlyDigester.Write(iv)
-	binary.Write(exitEarlyDigester, binary.BigEndian, int32(len(b.tag)))
+	err = binary.Write(exitEarlyDigester, binary.BigEndian, uint32(len(b.tag)))
+	if err != nil {
+		return nil, err
+	}
 	exitEarlyDigester.Write([]byte(b.tag))
 	cypher := cipher.NewCTR(aesCypher, iv)
-	stream := cipher.StreamWriter{S: cypher, W: buffer}
-	writer = io.MultiWriter(digester, stream)
-	binary.Write(writer, binary.BigEndian, int32(len(b.tag)))
+	writer = cipher.StreamWriter{S: cypher, W: writer}
+	//writer = io.MultiWriter(digester, stream)
+	err = binary.Write(writer, binary.BigEndian, uint32(len(b.tag)))
+	if err != nil {
+		return nil, err
+	}
 	n, err = writer.Write([]byte(b.tag))
 	if err != nil {
 		return nil, err
@@ -464,6 +639,210 @@ func (b *BackupSet) Encode() ([]byte, error) {
 	if n != len(exitEarlySum) {
 		return nil, fmt.Errorf("Error encoding backup set")
 	}
-
+	for _, record := range b.records {
+		recordType, data := record.Record()
+		binary.Write(writer, binary.BigEndian, uint8(0))
+		binary.Write(writer, binary.BigEndian, recordType)
+		n, err = writer.Write(data)
+		if err != nil {
+			return nil, err
+		}
+		if n != len(data) {
+			return nil, fmt.Errorf("Error encoding backup set")
+		}
+	}
+	n, err = buffer.Write(digester.Sum(nil))
+	if err != nil {
+		return nil, err
+	}
+	if n != 48 {
+		return nil, fmt.Errorf("Error encoding backup set")
+	}
 	return buffer.Bytes(), nil
+}
+
+func decodeBackupSet(secrets *Secrets, data []byte) (*BackupSet, error) {
+	b := &BackupSet{}
+	digester := hmac.New(sha512.New384, secrets.metadataAuthentication)
+	buffer := bytes.NewReader(data)
+	reader := io.TeeReader(buffer, digester)
+	version := make([]byte, 1)
+	n, err := reader.Read(version)
+	if err != nil {
+		return nil, err
+	}
+	if n != 1 {
+		return nil, fmt.Errorf("Error reading backup set version")
+	}
+	if version[0] != 0 {
+		return nil, fmt.Errorf("Unsupported file version %d", version[0])
+	}
+	nonce := make([]byte, 48)
+	n, err = reader.Read(nonce)
+	if err != nil {
+		return nil, err
+	}
+	if n != 48 {
+		return nil, fmt.Errorf("Error reading backup set nonce")
+	}
+	keyMat := nistConcatKDF(secrets.metadataMaster, []byte("metadata encryption"), nonce, 48)
+	key := keyMat[0:32]
+	iv := keyMat[32:48]
+	aesCypher, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	exitEarlyDigester := hmac.New(sha512.New384, secrets.metadataAuthentication)
+	exitEarlyDigester.Write([]byte{0}) // version
+	exitEarlyDigester.Write(nonce)
+	exitEarlyDigester.Write(key)
+	exitEarlyDigester.Write(iv)
+	cypher := cipher.NewCTR(aesCypher, iv)
+	reader = cipher.StreamReader{S: cypher, R: reader}
+	//reader = io.TeeReader(stream, digester)
+	var tagLen uint32
+	err = binary.Read(reader, binary.BigEndian, &tagLen)
+	if err != nil {
+		return nil, err
+	}
+	err = binary.Write(exitEarlyDigester, binary.BigEndian, tagLen)
+	if err != nil {
+		return nil, err
+	}
+	tagBytes := make([]byte, tagLen)
+	n, err = reader.Read(tagBytes)
+	if err != nil {
+		return nil, err
+	}
+	if n != int(tagLen) {
+		return nil, fmt.Errorf("Error decoding backup set")
+	}
+	exitEarlyDigester.Write(tagBytes)
+	b.tag = string(tagBytes)
+	exitEarlySum := make([]byte, 48)
+	n, err = reader.Read(exitEarlySum)
+	if err != nil {
+		return nil, err
+	}
+	if n != len(exitEarlySum) {
+		return nil, fmt.Errorf("Error decoding backup set")
+	}
+	if !bytes.Equal(exitEarlySum, exitEarlyDigester.Sum(nil)) {
+		return nil, fmt.Errorf("Error decoding backup set")
+	}
+	var bytesToRead uint32
+	for {
+		var record fileRecord
+		var version uint8
+		var recordType uint8
+		err = binary.Read(reader, binary.BigEndian, &version)
+		if err != nil {
+			return nil, err
+		}
+		if version != 0 {
+			return nil, fmt.Errorf("Error decoding backup set: unknown version %d", version)
+		}
+		err = binary.Read(reader, binary.BigEndian, &recordType)
+		if err != nil {
+			return nil, err
+		}
+		switch recordType {
+		case 0:
+			if bytesToRead != 0 {
+				return nil, fmt.Errorf("Error decoding backup set: unexpected start record")
+			}
+			record, err = readStartRecord(reader)
+			bytesToRead = record.Len() + record.(startRecord).length
+		case 1:
+			record, err = readHardLink(reader)
+		case 2:
+			record, err = readDirectory(reader)
+		case 3:
+			record, err = readRegularFile(reader)
+		case 8:
+			record, err = readEndRecord(reader)
+		default:
+			return nil, fmt.Errorf("Error decoding backup set: unsupported type %d", recordType)
+		}
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		b.records = append(b.records, record)
+		bytesToRead -= record.Len()
+		if bytesToRead == 0 {
+			break
+		}
+	}
+	digest, err := ioutil.ReadAll(buffer)
+	/*digest := make([]byte, 48)
+	n, err = buffer.Read(digest)*/
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if len(digest) != 48 {
+		return nil, fmt.Errorf("Error decoding backup set: could not read authentication tag %d", len(digest))
+	}
+	if !bytes.Equal(digest, digester.Sum(nil)) {
+		return nil, fmt.Errorf("Error decoding backup set: invalid authentication tag %s/%s", hex.EncodeToString(digest), hex.EncodeToString(digester.Sum(nil)))
+	}
+	return b, nil
+}
+
+func (b *BackupSet) StartBackup() error {
+	if b.records != nil {
+		_, ok := b.records[len(b.records)-1].(endRecord)
+		if !ok {
+			return fmt.Errorf("Final existing record in backup set is not an end record")
+		}
+	}
+	// will update the start record when ending backup
+	start := startRecord{date: time.Now()}
+	b.records = append(b.records, start)
+	b.lastStartIndex = len(b.records) - 1
+	return nil
+}
+
+func (b *BackupSet) EndBackup() error {
+	if b.records == nil {
+		return fmt.Errorf("Cannot end unstarted backup run")
+	}
+	start, ok := b.records[b.lastStartIndex].(startRecord)
+	if !ok {
+		return fmt.Errorf("Corrupted backup set: purported last start record is not a start record")
+	}
+	start.length = 0
+	digester := sha512.New384()
+	for i := b.lastStartIndex + 1; i < len(b.records); i++ {
+		start.length += b.records[i].Len()
+		recordType, data := b.records[i].Record()
+		err := binary.Write(digester, binary.BigEndian, uint8(0))
+		if err != nil {
+			return err
+		}
+		err = binary.Write(digester, binary.BigEndian, recordType)
+		if err != nil {
+			return err
+		}
+		digester.Write(data)
+	}
+	end := endRecord{digester.Sum(nil)}
+	start.length += end.Len()
+	b.records[b.lastStartIndex] = start
+	b.records = append(b.records, end)
+	return nil
+}
+
+func (b *BackupSet) Write(backend Backend) error {
+	encSet, err := b.encode()
+	if err != nil {
+		return err
+	}
+	fmt.Println(len(encSet))
+	return backend.WriteBackupSet(tagToId(b.secrets, b.tag), encSet)
+}
+
+func readLenString(reader io.Reader, length uint32) (string, error) {
+	stringBytes := make([]byte, length)
+	_, err := io.ReadFull(reader, stringBytes)
+	return string(stringBytes), err
 }
