@@ -413,8 +413,8 @@ func (b *BackupSet) fileRecordFromFileInfo(path string, info os.FileInfo) (recor
 	var inode devInode
 	if statOk {
 		inode := devInode{stat.Dev, stat.Ino}
-		if path, ok := b.hardLinks[inode]; ok {
-			return &hardLinkInfo{info.Name(), path}, nil
+		if targetPath, ok := b.hardLinks[inode]; ok {
+			return &hardLinkInfo{path, targetPath}, nil
 		}
 	}
 	mode := info.Mode()
@@ -422,7 +422,7 @@ func (b *BackupSet) fileRecordFromFileInfo(path string, info os.FileInfo) (recor
 	case mode&os.ModeDir != 0:
 		record = b.newDirectoryInfo(path, info)
 	case mode&os.ModeSymlink != 0:
-		path, err := os.Readlink(info.Name())
+		path, err := os.Readlink(path)
 		if err != nil {
 			return nil, err
 		}
@@ -435,7 +435,7 @@ func (b *BackupSet) fileRecordFromFileInfo(path string, info os.FileInfo) (recor
 				record = &blockDeviceInfo{deviceInfo{b.newBaseFileInfo(path, info), stat.Rdev}}
 			}
 		} else {
-			return nil, fmt.Errorf("Cannot handle device file " + info.Name())
+			return nil, fmt.Errorf("Cannot handle device file " + path)
 		}
 	case mode&os.ModeNamedPipe != 0:
 		record = &fifoInfo{b.newBaseFileInfo(path, info)}
@@ -448,7 +448,7 @@ func (b *BackupSet) fileRecordFromFileInfo(path string, info os.FileInfo) (recor
 		}
 	}
 	if statOk {
-		b.hardLinks[inode] = info.Name()
+		b.hardLinks[inode] = path
 	}
 	return record, nil
 }
@@ -505,7 +505,7 @@ func (b *BackupSet) newRegularFileInfo(path string, info os.FileInfo) (fileInfo 
 			}
 			b.seenChunks[string(storageLoc)] = true
 			if readErr != nil {
-				fmt.Println(readErr)
+				fmt.Fprintln(os.Stderr, readErr)
 				break
 			}
 		}
@@ -531,7 +531,7 @@ func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) baseFileInfo 
 		aTime := time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
 		cTime := time.Unix(stat.Ctim.Sec, stat.Ctim.Nsec)
 		mTime := time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
-		return baseFileInfo{name: info.Name(),
+		return baseFileInfo{name: path,
 			mode:     info.Mode(), //os.FileMode(stat.Mode),
 			uid:      stat.Uid,
 			gid:      stat.Gid,
@@ -540,7 +540,7 @@ func (b *BackupSet) newBaseFileInfo(path string, info os.FileInfo) baseFileInfo 
 			cTime:    cTime,
 			mTime:    mTime}
 	default:
-		return baseFileInfo{name: info.Name(),
+		return baseFileInfo{name: path,
 			mode: info.Mode()}
 	}
 	panic("Can't get here")
@@ -565,14 +565,6 @@ func EnsureBackupSet(backend Backend, secrets *Secrets, tag string) (b *BackupSe
 		return set, nil
 	}
 	return decodeBackupSet(secrets, existingData)
-}
-
-func fileToName(file *os.File) (name string, err error) {
-	info, err := file.Stat()
-	if err != nil {
-		return "*unknown file*", err
-	}
-	return info.Name(), nil
 }
 
 func (b *BackupSet) encode() ([]byte, error) {

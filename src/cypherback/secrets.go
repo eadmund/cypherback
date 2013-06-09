@@ -252,6 +252,9 @@ func ReadSecrets(backend Backend) (secrets *Secrets, err error) {
 	passphrase := termios.Password("Enter passphrase: ")
 
 	encSecrets, err := backend.ReadSecrets()
+	if err != nil {
+		return nil, err
+	}
 	file := bytes.NewBuffer(encSecrets)
 	version := make([]byte, 1)
 	n, err := file.Read(version)
