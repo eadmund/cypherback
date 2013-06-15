@@ -18,14 +18,16 @@
 package cypherback
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha512"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"hash"
 	"io"
-	"math/big"
 	"os"
 	"path/filepath"
 	//"bufio"
@@ -76,58 +78,35 @@ func ProcessPath(backupSet *BackupSet, path string) (err error) {
 }
 
 type encWriter struct {
-	writer   io.Writer
-	buf      []byte
-	cypher   cipher.Stream
-	nonce    []byte
-	authHMAC hash.Hash
+	plaintext    io.Writer
+	cyphertext   io.Writer
+	authHMAC     hash.Hash
+	bytesWritten int32
 }
 
 // FIXME: the semantics of an encWriter are goofy
 
-func (ew encWriter) Write(b []byte) (int, error) {
-	ew.buf = append(ew.buf, b...)
-	return len(b), nil
+func (ew *encWriter) Write(b []byte) (n int, err error) {
+	n, err = ew.cyphertext.Write(b)
+	ew.bytesWritten += int32(n)
+	return n, err
 }
 
-func (ew encWriter) Close() error {
-	writer := io.MultiWriter(ew.writer, ew.authHMAC)
-	_, err := writer.Write([]byte{0}) // version
-	if err != nil {
-		return err
-	}
-
-	_, err = writer.Write(ew.nonce)
-	if err != nil {
-		return err
-	}
-
-	lenBig := big.NewInt(int64(len(ew.buf)))
-	lenBytes := lenBig.Bytes()
-	lenBytes = append(make([]byte, 4-len(lenBytes)), lenBytes...)
-	_, err = writer.Write(lenBytes)
-	if err != nil {
-		return err
-	}
-
-	stream := cipher.StreamWriter{S: ew.cypher, W: writer}
-	n, err := stream.Write([]byte{1}) // compression always true
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return fmt.Errorf("Out-of-sync keystream")
-	}
-	n, err = stream.Write(ew.buf)
-	if err != nil {
-		return err
-	}
-	if n != len(ew.buf) {
-		return fmt.Errorf("Out-of-sync keystream")
-	}
+func (ew *encWriter) Close() error {
+	hashErr := binary.Write(ew.authHMAC, binary.BigEndian, ew.bytesWritten)
 	authSum := ew.authHMAC.Sum(nil)
-	_, err = writer.Write(authSum)
-	return err
+	_, writeErr := ew.plaintext.Write(authSum)
+	var plaintextError, cyphertextError error
+	if plaintext, ok := ew.plaintext.(io.ReadCloser); ok {
+		plaintextError = plaintext.Close()
+	}
+	if cyphertext, ok := ew.cyphertext.(io.ReadCloser); ok {
+		cyphertextError = cyphertext.Close()
+	}
+	if hashErr != nil || writeErr != nil || plaintextError != nil || cyphertextError != nil {
+		return fmt.Errorf("Closure error")
+	}
+	return nil
 }
 
 func newEncWriter(w io.Writer, secrets *Secrets) (*encWriter, error) {
@@ -148,6 +127,158 @@ func newEncWriter(w io.Writer, secrets *Secrets) (*encWriter, error) {
 	}
 	cypher := cipher.NewCTR(aesCypher, iv)
 	authHMAC := hmac.New(sha512.New384, secrets.chunkAuthentication)
-	authHMAC.Write([]byte{0}) // file version
-	return &encWriter{w, make([]byte, 0), cypher, nonce, authHMAC}, nil
+	writer := io.MultiWriter(w, authHMAC)
+	_, err = writer.Write([]byte{0}) // version
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = writer.Write(nonce)
+	if err != nil {
+		return nil, err
+	}
+
+	authHMAC.Write(key)
+	authHMAC.Write(iv)
+	stream := cipher.StreamWriter{S: cypher, W: writer}
+	n, err := stream.Write([]byte{1}) // compression always true
+	if err != nil {
+		return nil, err
+	}
+	if n != 1 {
+		return nil, fmt.Errorf("Out-of-sync keystream")
+	}
+
+	return &encWriter{writer, stream, authHMAC, 50}, nil
 }
+
+type encReader struct {
+	source   io.Reader
+	reader   io.Reader
+	authHMAC hash.Hash
+	length   int
+	numRead  int
+}
+
+func newEncReader(r io.Reader, secrets *Secrets, length int) (reader *encReader, err error) {
+	buf := make([]byte, 48)
+	n, err := r.Read(buf[:1])
+	if n != 1 {
+		return nil, fmt.Errorf("Error decoding chunk")
+	}
+	if err != nil {
+		return nil, err
+	}
+	version := buf[0]
+	if version != 0 {
+		return nil, fmt.Errorf("Unsupported chunk version %d", version)
+	}
+	n, err = r.Read(buf)
+	if n != 48 {
+		return nil, fmt.Errorf("Error decoding chunk")
+	}
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, 48)
+	copy(nonce, buf)
+	digester := hmac.New(sha512.New384, secrets.chunkMaster)
+	digester.Write([]byte("\000chunk encryption\000"))
+	digester.Write(nonce)
+	digester.Write([]byte{0x01, 0x80})
+	derivedKey := digester.Sum(nil)
+	key := derivedKey[0:32]
+	iv := derivedKey[32:48]
+	aesCypher, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	cypher := cipher.NewCTR(aesCypher, iv)
+	authHMAC := hmac.New(sha512.New384, secrets.chunkAuthentication)
+	authHMAC.Write([]byte{0})
+	authHMAC.Write(nonce)
+	authHMAC.Write(key)
+	authHMAC.Write(iv)
+	cypherStream := cipher.StreamReader{S: cypher, R: io.TeeReader(r, authHMAC)}
+	n, err = cypherStream.Read(buf[0:1])
+	if n != 1 {
+		return nil, fmt.Errorf("Error decoding chunk")
+	}
+	if err != nil {
+		return nil, err
+	}
+	//compressed_p := buf[0] != 0
+	return &encReader{source: r, reader: cypherStream, authHMAC: authHMAC, length: length - 48, numRead: 50}, nil
+}
+
+func (r *encReader) Read(buf []byte) (n int, err error) {
+	switch {
+	case r.numRead == r.length:
+		return 0, io.EOF
+	case r.numRead+len(buf) > r.length:
+		n, err = r.reader.Read(buf[:r.length-r.numRead])
+		r.numRead += n
+		if err != nil {
+			return n, err
+		}
+		return n, io.EOF
+	}
+	n, err = r.reader.Read(buf)
+	r.numRead += n
+	return n, err
+}
+
+func (r *encReader) Close() error {
+	binary.Write(r.authHMAC, binary.BigEndian, int32(r.length))
+	authTag := make([]byte, 48)
+	n, err := r.source.Read(authTag)
+	if n != 48 {
+		return fmt.Errorf("Could not authenticate chunk", n)
+	}
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(r.authHMAC.Sum(nil), authTag) {
+		return fmt.Errorf("Could not authenticate chunk\n%s\n%s", hex.EncodeToString(r.authHMAC.Sum(nil)), hex.EncodeToString(authTag))
+	}
+	if source, ok := r.source.(io.ReadCloser); ok {
+		return source.Close()
+	}
+	return nil
+}
+
+// func (s *Secrets) decodeChunk(cyphertext []byte) (plaintext []byte, err error) {
+// 	if cyphertext[0] != 1 {
+// 		return nil, fmt.Errorf("Version %d not recognised", cyphertext[0])
+// 	}
+// 	nonce := cyphertext[1:49]
+// 	digester := hmac.New(sha512.New384, secrets.chunkMaster)
+// 	digester.Write([]byte("\000chunk encryption\000"))
+// 	digester.Write(nonce)
+// 	digester.Write([]byte{0x01, 0x80})
+// 	derivedKey := digester.Sum(nil)
+// 	key := derivedKey[0:32]
+// 	iv := derivedKey[32:48]
+// 	aesCypher, err := aes.NewCipher(key)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	cypher := cipher.NewCTR(aesCypher, iv)
+// 	authHMAC := hmac.New(sha512.New384, secrets.chunkAuthentication)
+// 	authHMAC.Write([]byte{0}) // file version
+// 	authHMAC.Write([]byte{0})
+// 	authHMAC.Write(nonce)
+
+// 	reader := cipher.StreamReader{S: cypher, R: bytes.NewReader(cyphertext[49:-48])}
+// 	compressedByte := make([]byte, 1)
+// 	n, err := reader.Read(compressedByte)
+// 	if n != 1 {
+// 		return nil, fmt.Errorf("Error decoding chunk")
+// 	}
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	compressedP := compressedByte != 0
+// 	authHMAC.Write(compressedP)
+
+// }

@@ -34,14 +34,17 @@ func die(format string, args ...interface{}) {
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  cyphertite secrets generate [--plaintext-tag TAG]
+  cypherback secrets generate [--plaintext-tag TAG]
     Generate a new secrets file
 
-  cyphertite backup TAG PATH…
+  cypherback backup TAG PATH…
     Create a new backup set, or append to the existing backup set TAG
 
-  cyphertite list TAG
+  cypherback list TAG
     List contents of backup set TAG 
+
+  cypherback restore TAG
+    Restore backup set TAG
 `)
 	exitCode = 1
 }
@@ -148,6 +151,29 @@ func main() {
 			return
 		}
 		backupSet.ListRecords()
+	case "restore":
+		if len(os.Args) < 3 {
+			usage()
+			return
+		}
+		tag := os.Args[2]
+
+		secrets, err := cypherback.ReadSecrets(backend)
+		defer cypherback.ZeroSecrets(secrets)
+		if err != nil {
+			logError("Error: %v", err)
+			return
+		}
+		backupSet, err := cypherback.ReadBackupSet(backend, secrets, tag)
+		if err != nil {
+			logError("Error: %v", err)
+			return
+		}
+		err = backupSet.Restore(backend)
+		if err != nil {
+			logError("Error: %v", err)
+			return
+		}
 	default:
 		logError("Unknown command %s", os.Args[1])
 		return

@@ -220,7 +220,8 @@ Each chunk has the following format:
     1    48    Chunk nonce
    --------    begin AES-256-CTR
    49     1      Compressed-p
-   50     n      Data
+   50     4      Length(Data)
+   54     n      Data
    --------    end AES-256-CTR
     ?    48    HMAC-SHA-384(chunk authentication key,
                             [version, chunk nonce, key, IV, length(encrypted data),

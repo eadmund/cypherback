@@ -65,6 +65,14 @@ func newBackupSet(tag string, secrets *Secrets) (backupSet *BackupSet, err error
 	return backupSet, nil
 }
 
+type readChunk func(string) ([]byte, error)
+
+type fileRecord interface {
+	Record() (recordType uint8, data []byte)
+	Len() uint32
+	Restore(readChunk) error
+}
+
 type startRecord struct {
 	date   time.Time
 	length uint32
@@ -95,9 +103,8 @@ func (r startRecord) Len() uint32 {
 	return 2 + 8 + 4
 }
 
-type fileRecord interface {
-	Record() (recordType uint8, data []byte)
-	Len() uint32
+func (r startRecord) Restore(readChunk) error {
+	return nil
 }
 
 // FIXME: handle extended attributes
@@ -203,6 +210,16 @@ func (r baseFileInfo) Len() uint32 {
 	return 8 + 8 + 8 + 8 + 8 + 8 + 4 + uint32(len(r.name)) + 4 + uint32(len(r.userName)) + 4 + uint32(len(r.groupName))
 }
 
+func (r baseFileInfo) Restore() (err error) {
+	err = os.Chmod(r.name, r.mode)
+	if err != nil {
+		return nil
+	}
+	// FIXME: get chown working
+	err = os.Chtimes(r.name, r.aTime, r.mTime)
+	return nil
+}
+
 type regularFileInfo struct {
 	baseFileInfo
 	size   int64
@@ -250,6 +267,53 @@ func (r regularFileInfo) Len() uint32 {
 	return 2 + uint32(r.baseFileInfo.Len()) + 8 + 4 + uint32(96*len(r.chunks))
 }
 
+func (r regularFileInfo) Restore(readChunk readChunk) error {
+	file, err := os.OpenFile(r.name, os.O_RDWR, 0600)
+	if err != nil {
+		switch {
+		case os.IsPermission(err):
+			err = os.Chmod(r.name, 0600)
+			if err != nil {
+				return err
+			}
+			file, err = os.Create(r.name)
+			if err != nil {
+				return err
+			}
+		case os.IsNotExist(err):
+			file, err = os.Create(r.name)
+			if err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+	}
+	var j int
+	for i, chunkName := range r.chunks {
+		chunk, err := readChunk(chunkName)
+		if err != nil {
+			file.Close()
+			return err
+		}
+		n, err := file.Write(chunk)
+		if n != len(chunk) {
+			return fmt.Errorf("Wrote %d of %d bytes of chunk %d of %s", n, len(chunk), i, r.name)
+		}
+		if err != nil {
+			file.Close()
+			return err
+		}
+		j += len(chunk)
+	}
+	file.Close()
+	err = r.baseFileInfo.Restore()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type fifoInfo struct {
 	baseFileInfo
 }
@@ -262,6 +326,11 @@ func (r fifoInfo) Len() uint32 {
 	return 2 + r.baseFileInfo.Len()
 }
 
+func (r fifoInfo) Restore(readChunk) error {
+	return nil
+}
+
+// FIXME: hard links aren't detected
 type hardLinkInfo struct {
 	name     string
 	linkPath string
@@ -269,9 +338,7 @@ type hardLinkInfo struct {
 
 func readHardLink(reader io.Reader) (fileRecord, error) {
 	var pathLength uint32
-	var path string
 	var targetPathLength uint32
-	var targetPath string
 	err := binary.Read(reader, binary.BigEndian, &pathLength)
 	if err != nil {
 		return nil, err
@@ -296,7 +363,7 @@ func readHardLink(reader io.Reader) (fileRecord, error) {
 	if uint32(n) != targetPathLength {
 		return nil, fmt.Errorf("Error decoding backup set")
 	}
-	return hardLinkInfo{name: path, linkPath: targetPath}, nil
+	return hardLinkInfo{name: string(pathBytes), linkPath: string(targetPathBytes)}, nil
 }
 
 func (r hardLinkInfo) Record() (uint8, []byte) {
@@ -318,6 +385,10 @@ func (r hardLinkInfo) Len() uint32 {
 	return 2 + 4 + uint32(len(r.name)) + 4 + uint32(len(r.linkPath))
 }
 
+func (r hardLinkInfo) Restore(readChunk) error {
+	return nil
+}
+
 type symLinkInfo struct {
 	baseFileInfo
 	linkPath string
@@ -331,11 +402,36 @@ func (r symLinkInfo) Record() (uint8, []byte) {
 	return 5, writer.Bytes()
 }
 
+func readSymLink(reader io.Reader) (fileRecord, error) {
+	var targetPathLength uint32
+	baseInfo, err := readBaseFileInfo(reader)
+	if err != nil {
+		return nil, err
+	}
+	err = binary.Read(reader, binary.BigEndian, &targetPathLength)
+	if err != nil {
+		return nil, err
+	}
+	targetPathBytes := make([]byte, targetPathLength)
+	n, err := reader.Read(targetPathBytes)
+	if err != nil {
+		return nil, err
+	}
+	if uint32(n) != targetPathLength {
+		return nil, fmt.Errorf("Error decoding backup set")
+	}
+	return symLinkInfo{baseFileInfo: baseInfo, linkPath: string(targetPathBytes)}, nil
+}
+
 func (r symLinkInfo) Len() uint32 {
 	if len(r.linkPath) > math.MaxUint32 {
 		panic(fmt.Errorf("Link path > %d", math.MaxUint32))
 	}
 	return 2 + r.baseFileInfo.Len() + 4 + uint32(len(r.linkPath))
+}
+
+func (r symLinkInfo) Restore(readChunk) error {
+	return nil
 }
 
 type deviceInfo struct {
@@ -351,6 +447,10 @@ func (r deviceInfo) Record() []byte {
 
 func (r deviceInfo) Len() uint32 {
 	return 2 + r.baseFileInfo.Len() + 8
+}
+
+func (r deviceInfo) Restore(readChunk) error {
+	return nil
 }
 
 type charDeviceInfo struct {
@@ -387,8 +487,24 @@ func (r directoryInfo) Len() uint32 {
 	return 2 + r.baseFileInfo.Len()
 }
 
+func (r directoryInfo) Restore(readChunk) (err error) {
+	err = os.Mkdir(r.name, r.mode)
+	if err != nil && !os.IsExist(err) {
+		return err
+	}
+	err = r.baseFileInfo.Restore()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type endRecord struct {
 	hash []byte
+}
+
+func (r endRecord) Restore(readChunk) error {
+	return nil
 }
 
 func readEndRecord(reader io.Reader) (fileRecord, error) {
@@ -496,10 +612,16 @@ func (b *BackupSet) newRegularFileInfo(path string, info os.FileInfo) (fileInfo 
 			if err != nil {
 				return nil, err
 			}
-			defer encryptor.Close()
 			compressor := lzw.NewWriter(encryptor, lzw.LSB, 8)
-			defer compressor.Close()
 			_, err = compressor.Write(chunk[:n])
+			if err != nil {
+				return nil, err
+			}
+			err = compressor.Close()
+			if err != nil {
+				return nil, err
+			}
+			err = encryptor.Close()
 			if err != nil {
 				return nil, err
 			}
@@ -767,6 +889,8 @@ func decodeBackupSet(secrets *Secrets, data []byte) (*BackupSet, error) {
 			record, err = readDirectory(reader)
 		case 3:
 			record, err = readRegularFile(reader)
+		case 5:
+			record, err = readSymLink(reader)
 		case 8:
 			record, err = readEndRecord(reader)
 			lastWasEnd = true
@@ -893,4 +1017,39 @@ func (b *BackupSet) ListRecords() {
 			fmt.Printf("%T: %v\n", record, record)
 		}
 	}
+}
+
+func (b *BackupSet) Restore(backend Backend) error {
+	for _, record := range b.records {
+		secretsId := hex.EncodeToString(b.secrets.Id())
+		err := record.Restore(func(id string) (data []byte, err error) {
+			chunk, err := backend.ReadChunk(secretsId, id)
+			if err != nil {
+				return nil, err
+			}
+			encReader, err := newEncReader(bytes.NewReader(chunk), b.secrets, len(chunk))
+			if err != nil {
+				return nil, err
+			}
+			compressor := lzw.NewReader(encReader, lzw.LSB, 8)
+			data, err = ioutil.ReadAll(compressor)
+			if err != nil {
+				return nil, err
+			}
+			//fmt.Printf("retrieved %d bytes", len(data))
+			err = compressor.Close()
+			if err != nil {
+				return nil, err
+			}
+			err = encReader.Close()
+			if err != nil {
+				return nil, err
+			}
+			return data, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

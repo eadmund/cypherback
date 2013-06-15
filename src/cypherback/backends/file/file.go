@@ -92,7 +92,14 @@ func (fb *FileBackend) WriteBackupSet(secretsId, id string, data []byte) (err er
 	path = filepath.Join(path, id)
 	file, err := os.OpenFile(path, os.O_RDWR, 0666)
 	if err != nil {
-		return err
+		if os.IsNotExist(err) {
+			file, err = os.Create(path)
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
 	}
 	defer file.Close()
 
