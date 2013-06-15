@@ -90,20 +90,18 @@ func (fb *FileBackend) WriteBackupSet(secretsId, id string, data []byte) (err er
 		return fmt.Errorf("%s is not a directory", path)
 	}
 	path = filepath.Join(path, id)
-	info, err = os.Stat(path)
-	if os.IsNotExist(err) {
-		file, err := os.Create(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		n, err := file.Write(data)
-		if n != len(data) {
-			return fmt.Errorf("Couldn't write all data")
-		}
-		if err != nil {
-			return err
-		}
+	file, err := os.OpenFile(path, os.O_RDWR, 0666)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	n, err := file.Write(data)
+	if n != len(data) {
+		return fmt.Errorf("Couldn't write all data: wrote %d but had %d", n, len(data))
+	}
+	if err != nil {
+		return err
 	}
 	return nil
 }

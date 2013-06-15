@@ -103,8 +103,8 @@ bytes are not encrypted.  The backup set MUST NOT be considered valid
 unless these final 48 bytes are correct.
 
 A property of the stream-oriented format is that a new backup run may
-be appended by overwriting the authentication tag (and further bytes)
-with the new data, then appending a new authentication tag.
+be appended by overwriting past the authentication tag with the new
+data, then appending a new authentication tag.
 
 ### Set header
 
@@ -134,7 +134,7 @@ N.b.: all integers are unsigned unless otherwise noted.
 
       Byte Length
          2    8    Unix time in seconds when this record was written
-        10    4    Length in bytes of following records
+        10    4    Length in bytes of the backup run, including start and end records
 
 ### Hard link (type 1)
 
