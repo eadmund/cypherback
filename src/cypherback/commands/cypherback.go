@@ -19,7 +19,8 @@ package main
 
 import (
 	"cypherback"
-	fileBackend "cypherback/backends/file"
+	//fileBackend "cypherback/backends/file"
+	s3Backend "cypherback/backends/s3"
 	"fmt"
 	"log"
 	"os"
@@ -70,7 +71,16 @@ func main() {
 		logError("Couldn't ensure configuration directory exists: %s", err)
 		return
 	}
-	backend := fileBackend.NewFileBackend(configDir)
+	_ = configDir
+	//backend := fileBackend.NewFileBackend(configDir)
+	backend, err := s3Backend.New(os.Getenv("s3_access_key"), 
+		os.Getenv("s3_secret_key"),
+		"https://s3.amazonaws.com/",
+		"cypherback-default")
+	if err != nil {
+		logError("Error: %v", err)
+		return
+	}
 	switch os.Args[1] {
 	case "secrets":
 		if len(os.Args) < 3 {

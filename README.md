@@ -10,6 +10,52 @@ It supports deduplication in order to reduce storage costs.
 Cypherback itself contains no cryptographic code; all cryptographic
 primitives are implemented in the Go language libraries.
 
+# Configuration
+
+The file ~/.cypherback/cypherback.conf contains configuration.  The
+language is essentially shell variable declaration: keys and values,
+separated by a single equals (=) sign, with no spaces.  Unrecognised
+options are read and set but not used internally.
+
+Lines beginning with an octothorpe (#) are comments.
+
+Empty lines are ignored.
+
+All other lines are errors.
+
+All configuration variables are passed to subprocesses.
+
+## backend
+
+Specifies the backend to use.
+
+### s3
+
+Amazon's Simple Storage service.
+
+### file
+
+A simple file-and-directory format.  Saves data to ~/.cypherback by
+default.
+
+### memory
+
+In-memory storage.  Useful only for testing.
+
+## s3_endpoint
+
+Defaults to <URL:https://s3.amazonaws.com/>.
+
+## s3_location_constraint
+
+Defaults to the empty string.
+
+## s3_access_key
+
+## s3_secret_key
+
+# Internals
+
 ## Keys
 
 There are six keys in use: a 384-bit metadata storage key, a 256-bit
@@ -52,30 +98,29 @@ The current secrets file format is:
         371   48    HMAC-SHA-384(authentication key, bytes 0-370)
 
 A single invoker of cypherback may control multiple secrets files, but
-only one secrets file is in use at any one time; that is, no backup set
-or chunk is ever common to two or more secrets files.
+only one secrets file is in use at any one time; that is, no backup
+set or chunk is ever common to two or more secrets files.
+Deduplication takes place within a single secrets file.
 
 It's probable that many backends will store the secrets file under its
 own private path.
 
 ## Backup sets
 
-There may be multiple backup sets per secret, all sharing chunks.  Each
-backup set is stored under a random 384-bit name, which has no meaning
-and is normally not user-visible.
+A backup set consists of one or more backup runs over the same
+underlying data.  Right now each run is a complete backup, but a
+future version will include incremental backups.  There may be
+multiple backup sets per secret.  Each backup set is identified by a
+unique name, which is hashed with the metadata storage key to provide
+a unique 384-bit value (not normally displayed to the user).
 
-Each logical backup forms a 'backup set,' which is a set of files and
-their associated metadata.  The backup set format is inspired by tar,
-but with some modifications for this use case, where data is stored
-separately from metadata.  Each backup set is a sequence of backup runs,
-preceded by a set header.  Each backup set is identified by a tag,
-defaulting to a random 384-bit value (not the same as its storage name).
-
-Each backup run is represented by a sequence of records, starting with a
-start record indicating the date and the length in bytes of the
+Each backup run is represented by a sequence of records, starting with
+a start record indicating the date and the length in bytes of the
 following records, and ending with the last record.  File contents are
 not stored in the backup run or backup set; rather, each regular file
-record contains references to its contents.
+record contains references to its contents.  The metadata format is
+inspired by tar; the idea of separate encrypted and metadata files
+comes from cyphertite.
 
 To run a backup, first the current backup set, if any, is downloaded,
 then all files which have changed since the previous backup are added to
@@ -94,8 +139,10 @@ key,
 [0x0000000000000000, "metadata encryption", 0x00, backup set nonce, 0x0000000000000180]);
 the first 256 bits are the key and the following 128 bits are the IV.
 
-The nonce MUST be regenerated if any backup set information is
-rewritten (e.g. when expiring old backup sets).
+The nonce MUST be regenerated if any backup set data is altered,
+rather than appended (e.g. when expiring old backup sets or backup
+tag).  This is to prevent re-encrypting new data with the same CTR
+stream.  The current client regenerates the nonce on every write.
 
 The final 48 bytes of the backup set consist of HMAC-SHA-384(metadata
 authentication key, [key, IV, backup set data as written]).  These
@@ -104,7 +151,8 @@ unless these final 48 bytes are correct.
 
 A property of the stream-oriented format is that a new backup run may
 be appended by overwriting past the authentication tag with the new
-data, then appending a new authentication tag.
+data, then appending a new authentication tag.  The current client
+does not do this.
 
 ### Set header
 
@@ -219,7 +267,7 @@ Each chunk has the following format:
     0     1    Version (currently 0)
     1    48    Chunk nonce
    --------    begin AES-256-CTR
-   49     1      Compressed-p
+   49     1      Compression
    50     4      Length(Data)
    54     n      Data
    --------    end AES-256-CTR
@@ -234,6 +282,11 @@ The chunk encryption key and IV are generated under the NIST SP 800-108
 KDF in Counter Mode protocol: HMAC-SHA-384(chunk master key, [0x00,
 "chunk encryption", 0x00, chunk nonce, 0x0180]); the first 256 bits are
 the key and the following 128 bits are the IV.
+
+The compression used is indicated by a single byte: 0 for no
+compression and 1 for LZW.  Future versions may support more
+compression methods.  The current client always compresses (which may
+result in slight size increases with some data).
 
 # Use of Galois/Counter Mode
 
